@@ -693,14 +693,15 @@ static void cleanup_client_logins(void)
 
 	if (cf_client_login_timeout <= 0)
 		return;
-	for(int i=0;i<THREAD_NUM; i++){
-		statlist_for_each_safe(item, &(threads[i].login_client_list), tmp) {
+	
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	statlist_for_each_safe(item, &(this_thread->login_client_list), tmp) {
 		client = container_of(item, PgSocket, head);
 		age = now - client->connect_time;
 		if (age > cf_client_login_timeout)
 			disconnect_client(client, true, "client_login_timeout");
-		}
 	}
+
 }
 
 static void cleanup_inactive_autodatabases(void)
@@ -761,26 +762,27 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 			get_pool(db, db->forced_user_credentials);
 		}
 	}
-	int thread_id;
-	FOR_EACH_THREAD(thread_id){
-		statlist_for_each_safe(item, &(threads[thread_id].pool_list), tmp) {
-			pool = container_of(item, PgPool, head);
-			if (pool->db->admin)
-				continue;
-			pool_server_maint(pool);
-			pool_client_maint(pool);
 
-			/* is autodb active? */
-			if (pool->db->db_auto && pool->db->inactive_time == 0) {
-				if (pool_client_count(pool) > 0 || pool_server_count(pool) > 0)
-					pool->db->active_stamp = seq;
-			}
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+
+	statlist_for_each_safe(item, &(this_thread->pool_list), tmp) {
+		pool = container_of(item, PgPool, head);
+		if (pool->db->admin)
+			continue;
+		pool_server_maint(pool);
+		pool_client_maint(pool);
+
+		/* is autodb active? */
+		if (pool->db->db_auto && pool->db->inactive_time == 0) {
+			if (pool_client_count(pool) > 0 || pool_server_count(pool) > 0)
+				pool->db->active_stamp = seq;
 		}
-		statlist_for_each_safe(item, &(threads[thread_id].peer_pool_list), tmp) {
-			pool = container_of(item, PgPool, head);
-			peer_pool_server_maint(pool);
-			peer_pool_client_maint(pool);
-		}
+	}
+
+	statlist_for_each_safe(item, &(this_thread->peer_pool_list), tmp) {
+		pool = container_of(item, PgPool, head);
+		peer_pool_server_maint(pool);
+		peer_pool_client_maint(pool);
 	}
 
 	/* find inactive autodbs */
@@ -794,7 +796,6 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 			statlist_append(&autodatabase_idle_list, &db->head);
 		}
 	}
-
 	cleanup_inactive_autodatabases();
 
 	cleanup_client_logins();

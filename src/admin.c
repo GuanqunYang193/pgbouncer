@@ -587,18 +587,16 @@ static bool admin_show_lists(PgSocket *admin, const char *arg)
 	pktbuf_write_RowDescription(buf, "si", "list", "items");
 #define SENDLIST(name, size) pktbuf_write_DataRow(buf, "si", (name), (size))
 	SENDLIST("databases", statlist_count(&database_list));
-	int total_users = 0;
 	int total_login_clients = 0;
 	int total_pool_list = 0;
 	int total_peer_pool_list = 0;
 	int thread_id;
 	FOR_EACH_THREAD(thread_id){
-		total_users += statlist_count(&(threads[thread_id].user_list));
 		total_login_clients += statlist_count(&(threads[thread_id].login_client_list));
 		total_pool_list += statlist_count(&(threads[thread_id].pool_list));
 		total_peer_pool_list += statlist_count(&(threads[thread_id].peer_pool_list));
 	}
-	SENDLIST("users", total_users);
+	SENDLIST("users", statlist_count(&user_list));
 	SENDLIST("peers", statlist_count(&peer_list));
 	SENDLIST("pools", total_pool_list);
 	SENDLIST("peer_pools", total_peer_pool_list);
@@ -638,30 +636,28 @@ static bool admin_show_users(PgSocket *admin, const char *arg)
 	pktbuf_write_RowDescription(
 		buf, "ssssiiii", "name", "pool_size", "reserve_pool_size", "pool_mode", "max_user_connections", "current_connections",
 		"max_user_client_connections", "current_client_connections");
-	// TODO support multithread
-	for(int i=0;i<THREAD_NUM;i++){
-		statlist_for_each(item, &(threads[i].user_list)) {
-			PgGlobalUser *user = container_of(item, PgGlobalUser, head);
-			if (user->pool_size >= 0)
-				snprintf(pool_size_str, sizeof(pool_size_str), "%9d", user->pool_size);
-			if (user->res_pool_size >= 0)
-				snprintf(res_pool_size_str, sizeof(res_pool_size_str), "%9d", user->res_pool_size);
-			pool_mode_str = NULL;
 
-			cv.value_p = &user->pool_mode;
-			if (user->pool_mode != POOL_INHERIT)
-				pool_mode_str = cf_get_lookup(&cv);
+	statlist_for_each(item, &user_list) {
+		PgGlobalUser *user = container_of(item, PgGlobalUser, head);
+		if (user->pool_size >= 0)
+			snprintf(pool_size_str, sizeof(pool_size_str), "%9d", user->pool_size);
+		if (user->res_pool_size >= 0)
+			snprintf(res_pool_size_str, sizeof(res_pool_size_str), "%9d", user->res_pool_size);
+		pool_mode_str = NULL;
 
-			pktbuf_write_DataRow(buf, "ssssiiii", user->credentials.name,
-						pool_size_str,
-						res_pool_size_str,
-						pool_mode_str,
-						user_max_connections(user),
-						user->connection_count,
-						user_client_max_connections(user),
-						user->client_connection_count
-						);
-		}
+		cv.value_p = &user->pool_mode;
+		if (user->pool_mode != POOL_INHERIT)
+			pool_mode_str = cf_get_lookup(&cv);
+
+		pktbuf_write_DataRow(buf, "ssssiiii", user->credentials.name,
+					pool_size_str,
+					res_pool_size_str,
+					pool_mode_str,
+					user_max_connections(user),
+					user->connection_count,
+					user_client_max_connections(user),
+					user->client_connection_count
+					);
 	}
 
 	admin_flush(admin, buf, "SHOW");

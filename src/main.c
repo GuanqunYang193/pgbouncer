@@ -74,6 +74,7 @@ struct DNSContext *adns;
 struct HBA *parsed_hba;
 struct Ident *parsed_ident;
 
+struct SignalEvent main_signal_event;
 /*
  * configuration storage
  */
@@ -443,10 +444,8 @@ void load_config(void)
 	any_user_level_client_timeout_set = false;
 	set_dbs_dead(true);
 	set_peers_dead(true);
-	log_error("fhdskffsdff");
 	/* actual loading */
 	ok = cf_load_file(&main_config, cf_config_file);
-	log_error("fhdskffsdfsdasdf");
 	if (ok) {
 		/* load users if needed */
 		if (requires_auth_file(cf_auth_type))
@@ -459,7 +458,6 @@ void load_config(void)
 		/* if ini file missing, don't kill anybody */
 		set_dbs_dead(false);
 	}
-	log_error("fhdskffsddasdasfsdasdf");
 	if (cf_auth_type == AUTH_TYPE_HBA) {
 		struct Ident *ident;
 		struct HBA *hba;
@@ -627,10 +625,7 @@ static void write_pidfile(void)
 static void check_limits(void)
 {
 	struct rlimit lim;
-	int total_users = 0;
-	for(int i=0;i<THREAD_NUM;i++){
-		total_users += statlist_count(&(threads[i].user_list));
-	}
+	int total_users = statlist_count(&user_list);
 	int fd_count;
 	int err;
 	struct List *item;
@@ -827,7 +822,6 @@ static void cleanup(void)
 /* boot everything */
 int main(int argc, char *argv[])
 {	
-	log_error("21");
 	int c;
 	bool did_takeover = false;
 	char *arg_username = NULL;
@@ -843,9 +837,7 @@ int main(int argc, char *argv[])
 		{"user", required_argument, NULL, 'u'},
 		{NULL, 0, NULL, 0}
 	};
-	log_error("22");
 	setprogname(basename(argv[0]));
-	log_error("23");
 	/* parse cmdline */
 	while ((c = getopt_long(argc, argv, "qvhdVRu:", long_options, &long_idx)) != -1) {
 		switch (c) {
@@ -899,16 +891,11 @@ int main(int argc, char *argv[])
 	 */
 	atexit(cleanup);
 #endif
-	log_error("24s");
 	init_threads();
-	log_error("25s");
 	init_objects();
-	log_error("26s");
 	load_config();
 	main_config.loaded = true;
-	log_error("266s");
 	init_var_lookup(cf_track_extra_parameters);
-	log_error("27s");
 	init_caches();
 	logging_prefix_cb = log_socket_prefix;
 
@@ -928,8 +915,6 @@ int main(int argc, char *argv[])
 	/* disallow running as root */
 	if (getuid() == 0)
 		die("PgBouncer should not run as root");
-	log_error("28s");
-	admin_setup();
 
 	if (cf_reboot) {
 		log_warning("Online restart is deprecated, use so_reuseport instead");
@@ -979,7 +964,7 @@ int main(int argc, char *argv[])
 		 tls_backend_version());
 
 	sd_notify(0, "READY=1");
-	signal_setup(pgb_event_base);
+	signal_setup(pgb_event_base, &main_signal_event);
 	start_threads();
 	pooler_setup();
 	void* retval = NULL;

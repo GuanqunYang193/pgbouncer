@@ -29,6 +29,7 @@
 #include <usual/slab.h>
 
 /* those items will be allocated as needed, never freed */
+STATLIST(user_list);
 STATLIST(database_list);
 STATLIST(peer_list);
 
@@ -513,8 +514,7 @@ static PgGlobalUser *add_new_global_user(const char *name, const char *passwd)
 	list_init(&user->head);
 	list_init(&user->pool_list);
 	safe_strcpy(user->credentials.name, name, sizeof(user->credentials.name));
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-	put_in_order(&user->head, &(this_thread->user_list), cmp_user);
+	put_in_order(&user->head, &user_list, cmp_user);
 
 	aatree_insert(&user_tree, (uintptr_t)user->credentials.name, &user->credentials.tree_node);
 	user->pool_mode = POOL_INHERIT;
@@ -717,10 +717,9 @@ static PgPool *new_pool(PgDatabase *db, PgCredentials *user_credentials)
 	list_append(&user_credentials->global_user->pool_list, &pool->map_head);
 
 	/* keep pools in db/user order to make stats faster */
-	int thread_id;
-	FOR_EACH_THREAD(thread_id){
-		put_in_order(&pool->head, &(threads[thread_id].pool_list), cmp_pool);
-	}
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	put_in_order(&pool->head, &(this_thread->pool_list), cmp_pool);
+	
 	return pool;
 }
 
@@ -2666,9 +2665,10 @@ void objects_cleanup(void)
 		client_free(client);
 	}
 
+	memset(&user_list, 0, sizeof user_list);
+
 	for(int i=0;i<THREAD_NUM;i++){
 		memset(&(threads[i].login_client_list), 0, sizeof (threads[i].login_client_list));
-		memset(&(threads[i].user_list), 0, sizeof (threads[i].user_list));
 		memset(&database_list, 0, sizeof (database_list));
 		memset(&(threads[i].pool_list), 0, sizeof (threads[i].pool_list));
 		memset(&pam_user_tree, 0, sizeof (pam_user_tree));

@@ -674,11 +674,10 @@ bool loader_users_check(void)
 static void disable_users(void)
 {
 	struct List *item;
-	for(int i=0;i<THREAD_NUM;i++){
-		statlist_for_each(item, &(threads[i].user_list)) {
-			PgGlobalUser *user = container_of(item, PgGlobalUser, head);
-			user->credentials.passwd[0] = 0;
-		}
+	
+	statlist_for_each(item, &user_list) {
+		PgGlobalUser *user = container_of(item, PgGlobalUser, head);
+		user->credentials.passwd[0] = 0;
 	}
 }
 
@@ -699,7 +698,6 @@ bool load_auth_file(const char *fn)
 
 	log_debug("loading auth_file: \"%s\"", fn);
 	disable_users();
-
 	p = buf;
 	while (*p) {
 		/* skip whitespace and empty lines */
@@ -755,6 +753,5 @@ bool load_auth_file(const char *fn)
 		while (*p && *p != '\n') p++;
 	}
 	free(buf);
-
 	return true;
 }

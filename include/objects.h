@@ -16,6 +16,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+extern struct StatList user_list;
 extern struct AATree user_tree;
 extern struct StatList database_list;
 extern struct StatList peer_list;
