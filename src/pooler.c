@@ -367,7 +367,7 @@ loop:
 		return;
 	}
 
-	log_info("new fd from accept=%d", fd);
+	log_noise("new fd from accept=%d", fd);
 
 	struct ClientRequest client_request = {fd,is_unix};
 	// FIXME non-block pipe strategy

@@ -55,7 +55,8 @@ PgDatabase *prepare_auth_database(PgSocket *client)
 	if (!auth_dbname) {
 		auth_db = client->db;
 	} else {
-		auth_db = find_or_register_database(client, auth_dbname);
+		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		auth_db = find_or_register_database(client, auth_dbname, this_thread->thread_id);
 	}
 
 	if (!auth_db) {
@@ -496,7 +497,8 @@ bool set_pool(PgSocket *client, const char *dbname, const char *username, const 
 	Assert((password && takeover) || (!password && !takeover));
 
 	/* find database */
-	client->db = find_or_register_database(client, dbname);
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	client->db = find_or_register_database(client, dbname, this_thread->thread_id);
 	if (!client->db) {
 		client->db = calloc(1, sizeof(*client->db));
 		client->db->fake = true;

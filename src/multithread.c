@@ -41,21 +41,9 @@ static void handle_sigint(evutil_socket_t sock, short flags, void *arg)
 }
 
 
-/*
- * signal handling.
- *
- * handle_* functions are not actual signal handlers but called from
- * event_loop() so they have no restrictions what they can do.
- */
-static struct event ev_sigterm;
-static struct event ev_sigint;
+
 
 #ifndef WIN32
-
-static struct event ev_sigquit;
-static struct event ev_sigusr1;
-static struct event ev_sigusr2;
-static struct event ev_sighup;
 
 static void handle_sigquit(evutil_socket_t sock, short flags, void *arg)
 {
@@ -125,7 +113,7 @@ static void handle_sighup(int sock, short flags, void *arg)
 #endif
 
 
-void signal_setup(struct event_base * base)
+void signal_setup(struct event_base * base, struct SignalEvent* signal_event)
 {
 	int err;
 
@@ -141,33 +129,33 @@ void signal_setup(struct event_base * base)
 
 	/* install handlers */
 
-	evsignal_assign(&ev_sigusr1, base, SIGUSR1, handle_sigusr1, NULL);
-	err = evsignal_add(&ev_sigusr1, NULL);
+	evsignal_assign(&(signal_event->ev_sigusr1), base, SIGUSR1, handle_sigusr1, NULL);
+	err = evsignal_add(&(signal_event->ev_sigusr1), NULL);
 	if (err < 0)
 		fatal_perror("evsignal_add");
 
-	evsignal_assign(&ev_sigusr2, base, SIGUSR2, handle_sigusr2, NULL);
-	err = evsignal_add(&ev_sigusr2, NULL);
+	evsignal_assign(&(signal_event->ev_sigusr2), base, SIGUSR2, handle_sigusr2, NULL);
+	err = evsignal_add(&(signal_event->ev_sigusr2), NULL);
 	if (err < 0)
 		fatal_perror("evsignal_add");
 
-	evsignal_assign(&ev_sighup, base, SIGHUP, handle_sighup, NULL);
-	err = evsignal_add(&ev_sighup, NULL);
+	evsignal_assign(&(signal_event->ev_sighup), base, SIGHUP, handle_sighup, NULL);
+	err = evsignal_add(&(signal_event->ev_sighup), NULL);
 	if (err < 0)
 		fatal_perror("evsignal_add");
 
-	evsignal_assign(&ev_sigquit, base, SIGQUIT, handle_sigquit, NULL);
-	err = evsignal_add(&ev_sigquit, NULL);
+	evsignal_assign(&(signal_event->ev_sigquit), base, SIGQUIT, handle_sigquit, NULL);
+	err = evsignal_add(&(signal_event->ev_sigquit), NULL);
 	if (err < 0)
 		fatal_perror("evsignal_add");
 #endif
-	evsignal_assign(&ev_sigterm, base, SIGTERM, handle_sigterm, NULL);
-	err = evsignal_add(&ev_sigterm, NULL);
+	evsignal_assign(&(signal_event->ev_sigterm), base, SIGTERM, handle_sigterm, NULL);
+	err = evsignal_add(&(signal_event->ev_sigterm), NULL);
 	if (err < 0)
 		fatal_perror("evsignal_add");
 
-	evsignal_assign(&ev_sigint, base, SIGINT, handle_sigint, NULL);
-	err = evsignal_add(&ev_sigint, NULL);
+	evsignal_assign(&(signal_event->ev_sigint), base, SIGINT, handle_sigint, NULL);
+	err = evsignal_add(&(signal_event->ev_sigint), NULL);
 	if (err < 0)
 		fatal_perror("evsignal_add");
 }
@@ -183,12 +171,12 @@ void* worker_func(void* arg){
         fprintf(stderr, "[Thread %ld] Failed to create event_base.\n", this_thread->thread_id);
         die("event_base_new() failed");
     }
-    printf("[Thread %ld] Created event_base: %ld\n", base, this_thread->thread_id);
 
     pthread_setspecific(event_base_key, base);
 
+	admin_setup();
     thread_pooler_setup();
-	signal_setup(base);
+	signal_setup(base, &(this_thread->signal_event));
 	janitor_setup();
 	stats_setup();
 
@@ -224,11 +212,11 @@ void init_thread(int thread_id){
 	if (fcntl(threads[thread_id].pipefd[1], F_SETFL, flags | O_NONBLOCK) < 0) {
 		die("set pipe flag failed");
 	}
-	statlist_init(&threads[thread_id].sock_list, NULL);
-	statlist_init(&threads[thread_id].user_list, NULL);
-	statlist_init(&threads[thread_id].pool_list, NULL);
-	statlist_init(&threads[thread_id].peer_pool_list, NULL);
-	
+	statlist_init(&(threads[thread_id].sock_list), NULL);
+	statlist_init(&(threads[thread_id].pool_list), NULL);
+	statlist_init(&(threads[thread_id].peer_pool_list), NULL);
+	statlist_init(&(threads[thread_id].login_client_list), NULL);
+	statlist_init(&(threads[thread_id].database_list), NULL);
 }
 
 void start_threads(){
@@ -243,7 +231,6 @@ void start_threads(){
 }
 
 void init_threads(){
-	printf("init_threads \n");
 	for(int i=0;i<THREAD_NUM;i++){
 		init_thread(i);
 	}

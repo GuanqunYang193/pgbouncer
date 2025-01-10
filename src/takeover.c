@@ -144,20 +144,20 @@ static void takeover_load_fd(struct MBuf *pkt, const struct cmsghdr *cmsg)
 		if (!pga_pton(&addr, saddr, port))
 			fatal("failed to convert address: %s", saddr);
 	}
-
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	/* decide what to do with it */
 	if (strcmp(task, "client") == 0) {
 		res = use_client_socket(fd, &addr, db, user, ckey, oldfd, linkfd,
 					client_enc, std_string, datestyle, timezone,
 					password,
 					scram_client_key, scram_client_key_len,
-					scram_server_key, scram_server_key_len);
+					scram_server_key, scram_server_key_len, this_thread->thread_id);
 	} else if (strcmp(task, "server") == 0) {
 		res = use_server_socket(fd, &addr, db, user, ckey, oldfd, linkfd,
 					client_enc, std_string, datestyle, timezone,
 					password,
 					scram_client_key, scram_client_key_len,
-					scram_server_key, scram_server_key_len);
+					scram_server_key, scram_server_key_len, this_thread->thread_id);
 	} else if (strcmp(task, "pooler") == 0) {
 		res = use_pooler_socket(fd, pga_is_unix(&addr));
 	} else {
@@ -365,8 +365,11 @@ void takeover_init(void)
 {
 	PgDatabase *db;
 	PgPool *pool = NULL;
-
-	db = find_database("pgbouncer");
+	log_error("takeover init");
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		db = find_database("pgbouncer", thread_id);
+	}
 	if (db)
 		pool = get_pool(db, db->forced_user_credentials);
 

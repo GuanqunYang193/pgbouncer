@@ -370,122 +370,123 @@ bool parse_database(void *base, const char *name, const char *connstr)
 			goto fail;
 		}
 	}
-
-	db = add_database(name);
-	if (!db) {
-		log_error("cannot create database, no memory?");
-		goto fail;
-	}
-
-	/* tag the db as alive */
-	db->db_dead = false;
-	/* assuming not an autodb */
-	db->db_auto = false;
-	db->inactive_time = 0;
-
-	/* if updating old db, check if anything changed */
-	if (db->dbname) {
-		bool changed = false;
-		if (strcmp(db->dbname, dbname) != 0) {
-			changed = true;
-		} else if (!strcmpeq(host, db->host)) {
-			changed = true;
-		} else if (port != db->port) {
-			changed = true;
-		} else if (username && !db->forced_user_credentials) {
-			changed = true;
-		} else if (username && strcmp(username, db->forced_user_credentials->name) != 0) {
-			changed = true;
-		} else if (!username && db->forced_user_credentials) {
-			changed = true;
-		} else if (!strcmpeq(connect_query, db->connect_query)) {
-			changed = true;
-		} else if (!strcmpeq(db->auth_dbname, auth_dbname)) {
-			changed = true;
-		} else if (!strcmpeq(db->auth_query, auth_query)) {
-			changed = true;
-		} else if (load_balance_hosts != db->load_balance_hosts) {
-			changed = true;
-		}
-		if (changed)
-			tag_database_dirty(db);
-	}
-
-	free(db->host);
-	db->host = host;
-	host = NULL;
-	db->port = port;
-	db->pool_size = pool_size;
-	db->min_pool_size = min_pool_size;
-	db->res_pool_size = res_pool_size;
-	db->pool_mode = pool_mode;
-	db->max_db_client_connections = max_db_client_connections;
-	db->max_db_connections = max_db_connections;
-	db->server_lifetime = server_lifetime;
-	db->load_balance_hosts = load_balance_hosts;
-	free(db->connect_query);
-	db->connect_query = connect_query;
-	connect_query = NULL;
-
-	if (!set_param_value(&db->auth_dbname, auth_dbname))
-		goto fail;
-
-	if (!set_param_value(&db->auth_query, auth_query))
-		goto fail;
-
-	if (db->startup_params) {
-		msg = db->startup_params;
-		pktbuf_reset(msg);
-	} else {
-		msg = pktbuf_dynamic(128);
-		if (!msg)
-			die("out of memory");
-		db->startup_params = msg;
-	}
-
-	pktbuf_put_string(msg, "database");
-	dbname_ofs = msg->write_pos;
-	pktbuf_put_string(msg, dbname);
-
-	if (client_encoding) {
-		pktbuf_put_string(msg, "client_encoding");
-		pktbuf_put_string(msg, client_encoding);
-	}
-
-	if (datestyle) {
-		pktbuf_put_string(msg, "datestyle");
-		pktbuf_put_string(msg, datestyle);
-	}
-
-	if (timezone) {
-		pktbuf_put_string(msg, "timezone");
-		pktbuf_put_string(msg, timezone);
-	}
-
-	if (appname) {
-		pktbuf_put_string(msg, "application_name");
-		pktbuf_put_string(msg, appname);
-	}
-
-	if (auth_username != NULL) {
-		db->auth_user_credentials = find_or_add_new_global_credentials(auth_username, "");
-		if (!db->auth_user_credentials)
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		db = add_database(name, thread_id);
+		if (!db) {
+			log_error("cannot create database, no memory?");
 			goto fail;
-	} else if (db->auth_user_credentials) {
-		db->auth_user_credentials = NULL;
-	}
+		}
+		/* tag the db as alive */
+		db->db_dead = false;
+		/* assuming not an autodb */
+		db->db_auto = false;
+		db->inactive_time = 0;
 
-	/* if user is forced, create fake object for it */
-	if (username != NULL) {
-		if (!force_user_credentials(db, username, password))
-			log_warning("db setup failed, trying to continue");
-	} else if (db->forced_user_credentials) {
-		log_warning("losing forced user not supported,"
-			    " keeping old setting");
-	}
+		/* if updating old db, check if anything changed */
+		if (db->dbname) {
+			bool changed = false;
+			if (strcmp(db->dbname, dbname) != 0) {
+				changed = true;
+			} else if (!strcmpeq(host, db->host)) {
+				changed = true;
+			} else if (port != db->port) {
+				changed = true;
+			} else if (username && !db->forced_user_credentials) {
+				changed = true;
+			} else if (username && strcmp(username, db->forced_user_credentials->name) != 0) {
+				changed = true;
+			} else if (!username && db->forced_user_credentials) {
+				changed = true;
+			} else if (!strcmpeq(connect_query, db->connect_query)) {
+				changed = true;
+			} else if (!strcmpeq(db->auth_dbname, auth_dbname)) {
+				changed = true;
+			} else if (!strcmpeq(db->auth_query, auth_query)) {
+				changed = true;
+			} else if (load_balance_hosts != db->load_balance_hosts) {
+				changed = true;
+			}
+			if (changed)
+				tag_database_dirty(db);
+		}
 
-	/* remember dbname */
-	db->dbname = (char *)msg->buf + dbname_ofs;
+		free(db->host);
+		db->host = host;
+		host = NULL;
+		db->port = port;
+		db->pool_size = pool_size;
+		db->min_pool_size = min_pool_size;
+		db->res_pool_size = res_pool_size;
+		db->pool_mode = pool_mode;
+		db->max_db_client_connections = max_db_client_connections;
+		db->max_db_connections = max_db_connections;
+		db->server_lifetime = server_lifetime;
+		db->load_balance_hosts = load_balance_hosts;
+		free(db->connect_query);
+		db->connect_query = connect_query;
+		connect_query = NULL;
+
+		if (!set_param_value(&db->auth_dbname, auth_dbname))
+			goto fail;
+
+		if (!set_param_value(&db->auth_query, auth_query))
+			goto fail;
+
+		if (db->startup_params) {
+			msg = db->startup_params;
+			pktbuf_reset(msg);
+		} else {
+			msg = pktbuf_dynamic(128);
+			if (!msg)
+				die("out of memory");
+			db->startup_params = msg;
+		}
+
+		pktbuf_put_string(msg, "database");
+		dbname_ofs = msg->write_pos;
+		pktbuf_put_string(msg, dbname);
+
+		if (client_encoding) {
+			pktbuf_put_string(msg, "client_encoding");
+			pktbuf_put_string(msg, client_encoding);
+		}
+
+		if (datestyle) {
+			pktbuf_put_string(msg, "datestyle");
+			pktbuf_put_string(msg, datestyle);
+		}
+
+		if (timezone) {
+			pktbuf_put_string(msg, "timezone");
+			pktbuf_put_string(msg, timezone);
+		}
+
+		if (appname) {
+			pktbuf_put_string(msg, "application_name");
+			pktbuf_put_string(msg, appname);
+		}
+
+		if (auth_username != NULL) {
+			db->auth_user_credentials = find_or_add_new_global_credentials(auth_username, "");
+			if (!db->auth_user_credentials)
+				goto fail;
+		} else if (db->auth_user_credentials) {
+			db->auth_user_credentials = NULL;
+		}
+
+		/* if user is forced, create fake object for it */
+		if (username != NULL) {
+			if (!force_user_credentials(db, username, password))
+				log_warning("db setup failed, trying to continue");
+		} else if (db->forced_user_credentials) {
+			log_warning("losing forced user not supported,"
+					" keeping old setting");
+		}
+
+		/* remember dbname */
+		db->dbname = (char *)msg->buf + dbname_ofs;
+	}
 
 	free(tmp_connstr);
 	return true;
@@ -674,11 +675,10 @@ bool loader_users_check(void)
 static void disable_users(void)
 {
 	struct List *item;
-	for(int i=0;i<THREAD_NUM;i++){
-		statlist_for_each(item, &(threads[i].user_list)) {
-			PgGlobalUser *user = container_of(item, PgGlobalUser, head);
-			user->credentials.passwd[0] = 0;
-		}
+	
+	statlist_for_each(item, &user_list) {
+		PgGlobalUser *user = container_of(item, PgGlobalUser, head);
+		user->credentials.passwd[0] = 0;
 	}
 }
 
@@ -699,7 +699,6 @@ bool load_auth_file(const char *fn)
 
 	log_debug("loading auth_file: \"%s\"", fn);
 	disable_users();
-
 	p = buf;
 	while (*p) {
 		/* skip whitespace and empty lines */
@@ -755,6 +754,5 @@ bool load_auth_file(const char *fn)
 		while (*p && *p != '\n') p++;
 	}
 	free(buf);
-
 	return true;
 }
