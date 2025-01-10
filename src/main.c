@@ -403,14 +403,16 @@ static void set_dbs_dead(bool flag)
 {
 	struct List *item;
 	PgDatabase *db;
-
-	statlist_for_each(item, &database_list) {
-		db = container_of(item, PgDatabase, head);
-		if (db->admin)
-			continue;
-		if (db->db_auto)
-			continue;
-		db->db_dead = flag;
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each(item, &(threads[thread_id].database_list)) {
+			db = container_of(item, PgDatabase, head);
+			if (db->admin)
+				continue;
+			if (db->db_auto)
+				continue;
+			db->db_dead = flag;
+		}
 	}
 }
 
@@ -644,12 +646,15 @@ static void check_limits(void)
 
 	/* calculate theoretical max, +10 is just in case */
 	fd_count = cf_max_client_conn + 10;
-	statlist_for_each(item, &database_list) {
-		db = container_of(item, PgDatabase, head);
-		if (db->forced_user_credentials)
-			fd_count += (db->pool_size >= 0 ? db->pool_size : cf_default_pool_size);
-		else
-			fd_count += (db->pool_size >= 0 ? db->pool_size : cf_default_pool_size) * total_users;
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each(item, &(threads[thread_id].database_list)) {
+			db = container_of(item, PgDatabase, head);
+			if (db->forced_user_credentials)
+				fd_count += (db->pool_size >= 0 ? db->pool_size : cf_default_pool_size);
+			else
+				fd_count += (db->pool_size >= 0 ? db->pool_size : cf_default_pool_size) * total_users;
+		}
 	}
 
 	log_info("kernel file descriptor limit: %d (hard: %d); max_client_conn: %d, max expected fd use: %d",

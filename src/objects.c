@@ -30,7 +30,6 @@
 
 /* those items will be allocated as needed, never freed */
 STATLIST(user_list);
-STATLIST(database_list);
 STATLIST(peer_list);
 
 /* All locally defined users (in auth_file) are kept here. */
@@ -451,9 +450,9 @@ PgDatabase *add_peer(const char *name, int peer_id)
 }
 
 /* create new object if new, then return it */
-PgDatabase *add_database(const char *name)
+PgDatabase *add_database(const char *name, int thread_id)
 {
-	PgDatabase *db = find_database(name);
+	PgDatabase *db = find_database(name, thread_id);
 
 	/* create new object if needed */
 	if (db == NULL) {
@@ -468,14 +467,14 @@ PgDatabase *add_database(const char *name)
 			return NULL;
 		}
 		aatree_init(&db->user_tree, credentials_node_cmp, credentials_node_release);
-		put_in_order(&db->head, &database_list, cmp_database);
+		put_in_order(&db->head, &(threads[thread_id].database_list), cmp_database);
 	}
 
 	return db;
 }
 
 /* register new auto database */
-PgDatabase *register_auto_database(const char *name)
+PgDatabase *register_auto_database(const char *name, int thread_id)
 {
 	PgDatabase *db;
 
@@ -485,7 +484,7 @@ PgDatabase *register_auto_database(const char *name)
 	if (!parse_database(NULL, name, cf_autodb_connstr))
 		return NULL;
 
-	db = find_database(name);
+	db = find_database(name, thread_id);
 	if (db) {
 		db->db_auto = true;
 	}
@@ -626,11 +625,11 @@ PgDatabase *find_peer(int peer_id)
 }
 
 /* find an existing database */
-PgDatabase *find_database(const char *name)
+PgDatabase *find_database(const char *name, int thread_id)
 {
 	struct List *item, *tmp;
 	PgDatabase *db;
-	statlist_for_each(item, &database_list) {
+	statlist_for_each(item, &(threads[thread_id].database_list)) {
 		db = container_of(item, PgDatabase, head);
 		if (strcmp(db->name, name) == 0)
 			return db;
@@ -641,7 +640,7 @@ PgDatabase *find_database(const char *name)
 		if (strcmp(db->name, name) == 0) {
 			db->inactive_time = 0;
 			statlist_remove(&autodatabase_idle_list, &db->head);
-			put_in_order(&db->head, &database_list, cmp_database);
+			put_in_order(&db->head, &(threads[thread_id].database_list), cmp_database);
 			return db;
 		}
 	}
@@ -652,11 +651,11 @@ PgDatabase *find_database(const char *name)
  * Similar to find_database. In case database is not found, it will try to register
  * it if auto-database ('*') is configured.
  */
-PgDatabase *find_or_register_database(PgSocket *connection, const char *name)
+PgDatabase *find_or_register_database(PgSocket *connection, const char *name, int thread_id)
 {
-	PgDatabase *db = find_database(name);
+	PgDatabase *db = find_database(name, thread_id);
 	if (db == NULL) {
-		db = register_auto_database(name);
+		db = register_auto_database(name, thread_id);
 		if (db != NULL) {
 			slog_info(connection,
 				  "registered new auto-database: %s", name);
@@ -2280,15 +2279,16 @@ bool use_client_socket(int fd, PgAddr *addr,
 		       const char *datestyle, const char *timezone,
 		       const char *password,
 		       const char *scram_client_key, int scram_client_key_len,
-		       const char *scram_server_key, int scram_server_key_len)
+		       const char *scram_server_key, int scram_server_key_len,
+			   int thread_id)
 {
-	PgDatabase *db = find_database(dbname);
+	PgDatabase *db = find_database(dbname, thread_id);
 	PgSocket *client;
 	PktBuf tmp;
 
 	/* if the database not found, it's an auto database -> registering... */
 	if (!db) {
-		db = register_auto_database(dbname);
+		db = register_auto_database(dbname, thread_id);
 		if (!db)
 			return true;
 	}
@@ -2358,9 +2358,11 @@ bool use_server_socket(int fd, PgAddr *addr,
 		       const char *datestyle, const char *timezone,
 		       const char *password,
 		       const char *scram_client_key, int scram_client_key_len,
-		       const char *scram_server_key, int scram_server_key_len)
+		       const char *scram_server_key, int scram_server_key_len,
+			   int thread_id)
 {
-	PgDatabase *db = find_database(dbname);
+	
+	PgDatabase *db = find_database(dbname, thread_id);
 	PgCredentials *credentials;
 	PgPool *pool;
 	PgSocket *server;
@@ -2369,7 +2371,7 @@ bool use_server_socket(int fd, PgAddr *addr,
 
 	/* if the database not found, it's an auto database -> registering... */
 	if (!db) {
-		db = register_auto_database(dbname);
+		db = register_auto_database(dbname, thread_id);
 		if (!db)
 			return true;
 	}
@@ -2552,20 +2554,24 @@ void tag_autodb_dirty(void)
 	/*
 	 * reload databases.
 	 */
-	statlist_for_each(item, &database_list) {
-		db = container_of(item, PgDatabase, head);
-		if (db->db_auto)
-			register_auto_database(db->name);
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each(item, &(threads[thread_id].database_list)) {
+			db = container_of(item, PgDatabase, head);
+			if (db->db_auto)
+				register_auto_database(db->name, thread_id);
+		}
 	}
-	statlist_for_each_safe(item, &autodatabase_idle_list, tmp) {
-		db = container_of(item, PgDatabase, head);
-		if (db->db_auto)
-			register_auto_database(db->name);
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each_safe(item, &(threads[thread_id].database_list), tmp) {
+			db = container_of(item, PgDatabase, head);
+			if (db->db_auto)
+				register_auto_database(db->name, thread_id);
+		}
 	}
 	/*
 	 * reload pools
 	 */
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -2646,9 +2652,13 @@ void objects_cleanup(void)
 		db = container_of(item, PgDatabase, head);
 		kill_database(db);
 	}
-	statlist_for_each_safe(item, &database_list, tmp) {
-		db = container_of(item, PgDatabase, head);
-		kill_database(db);
+	
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each_safe(item, &(threads[thread_id].database_list), tmp) {
+			db = container_of(item, PgDatabase, head);
+			kill_database(db);
+		}
 	}
 	statlist_for_each_safe(item, &peer_list, tmp) {
 		PgDatabase *peer = container_of(item, PgDatabase, head);
@@ -2669,7 +2679,7 @@ void objects_cleanup(void)
 
 	for(int i=0;i<THREAD_NUM;i++){
 		memset(&(threads[i].login_client_list), 0, sizeof (threads[i].login_client_list));
-		memset(&database_list, 0, sizeof (database_list));
+		memset(&(threads[i].database_list), 0, sizeof (threads[i].database_list));
 		memset(&(threads[i].pool_list), 0, sizeof (threads[i].pool_list));
 		memset(&pam_user_tree, 0, sizeof (pam_user_tree));
 		memset(&(user_tree), 0, sizeof user_tree);

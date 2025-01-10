@@ -18,7 +18,6 @@
 
 extern struct StatList user_list;
 extern struct AATree user_tree;
-extern struct StatList database_list;
 extern struct StatList peer_list;
 extern struct StatList autodatabase_idle_list;
 extern struct Slab *client_cache;
@@ -38,8 +37,8 @@ extern PgPreparedStatement *prepared_statements;
 extern unsigned long long int last_pgsocket_id;
 
 PgDatabase *find_peer(int peer_id);
-PgDatabase *find_database(const char *name);
-PgDatabase *find_or_register_database(PgSocket *connection, const char *name);
+PgDatabase *find_database(const char *name, int thread_id);
+PgDatabase *find_or_register_database(PgSocket *connection, const char *name, int thread_id);
 PgGlobalUser *find_global_user(const char *name);
 PgCredentials *find_global_credentials(const char *name);
 PgPool *get_pool(PgDatabase *db, PgCredentials *user_credentials);
@@ -60,8 +59,8 @@ void disconnect_client(PgSocket *client, bool notify, const char *reason, ...) _
 void disconnect_client_sqlstate(PgSocket *client, bool notify, const char *sqlstate, const char *reason);
 
 PgDatabase * add_peer(const char *name, int peer_id) _MUSTCHECK;
-PgDatabase * add_database(const char *name) _MUSTCHECK;
-PgDatabase *register_auto_database(const char *name);
+PgDatabase * add_database(const char *name, int thread_id) _MUSTCHECK;
+PgDatabase *register_auto_database(const char *name, int thread_id);
 PgCredentials * add_dynamic_credentials(PgDatabase *db, const char *name, const char *passwd) _MUSTCHECK;
 PgCredentials * force_user_credentials(PgDatabase *db, const char *username, const char *passwd) _MUSTCHECK;
 bool add_outstanding_request(PgSocket *client, char type, ResponseAction action) _MUSTCHECK;
@@ -84,12 +83,12 @@ bool use_client_socket(int fd, PgAddr *addr, const char *dbname, const char *use
 		       const char *client_end, const char *std_string, const char *datestyle, const char *timezone,
 		       const char *password,
 		       const char *scram_client_key, int scram_client_key_len,
-		       const char *scram_server_key, int scram_server_key_len) _MUSTCHECK;
+		       const char *scram_server_key, int scram_server_key_len, int thread_id) _MUSTCHECK;
 bool use_server_socket(int fd, PgAddr *addr, const char *dbname, const char *username, uint64_t ckey, int oldfd, int linkfd,
 		       const char *client_end, const char *std_string, const char *datestyle, const char *timezone,
 		       const char *password,
 		       const char *scram_client_key, int scram_client_key_len,
-		       const char *scram_server_key, int scram_server_key_len) _MUSTCHECK;
+		       const char *scram_server_key, int scram_server_key_len, int thread_id) _MUSTCHECK;
 
 void activate_client(PgSocket *client);
 

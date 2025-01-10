@@ -216,7 +216,7 @@ void init_thread(int thread_id){
 	statlist_init(&(threads[thread_id].pool_list), NULL);
 	statlist_init(&(threads[thread_id].peer_pool_list), NULL);
 	statlist_init(&(threads[thread_id].login_client_list), NULL);
-	
+	statlist_init(&(threads[thread_id].database_list), NULL);
 }
 
 void start_threads(){

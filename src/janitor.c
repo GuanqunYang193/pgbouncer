@@ -756,14 +756,14 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	 * the risk of creating connections in unexpected ways, where there are
 	 * many users.
 	   _	 */
-	statlist_for_each_safe(item, &database_list, tmp) {
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	statlist_for_each_safe(item, &(this_thread->database_list), tmp) {
 		db = container_of(item, PgDatabase, head);
 		if (database_min_pool_size(db) > 0 && db->forced_user_credentials != NULL) {
 			get_pool(db, db->forced_user_credentials);
 		}
 	}
 
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 
 	statlist_for_each_safe(item, &(this_thread->pool_list), tmp) {
 		pool = container_of(item, PgPool, head);
@@ -786,13 +786,13 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	}
 
 	/* find inactive autodbs */
-	statlist_for_each_safe(item, &database_list, tmp) {
+	statlist_for_each_safe(item, &(this_thread->database_list), tmp) {
 		db = container_of(item, PgDatabase, head);
 		if (db->db_auto && db->inactive_time == 0) {
 			if (db->active_stamp == seq)
 				continue;
 			db->inactive_time = get_cached_time();
-			statlist_remove(&database_list, &db->head);
+			statlist_remove(&(this_thread->database_list), &db->head);
 			statlist_append(&autodatabase_idle_list, &db->head);
 		}
 	}
@@ -881,7 +881,7 @@ void kill_database(PgDatabase *db)
 {
 	PgPool *pool;
 	struct List *item, *tmp;
-
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	log_warning("dropping database '%s' as it does not exist anymore or inactive auto-database", db->name);
 
 	int thread_id;
@@ -902,7 +902,7 @@ void kill_database(PgDatabase *db)
 	if (db->inactive_time) {
 		statlist_remove(&autodatabase_idle_list, &db->head);
 	} else {
-		statlist_remove(&database_list, &db->head);
+		statlist_remove(&(this_thread->database_list), &db->head);
 	}
 
 	if (db->auth_dbname)
@@ -942,15 +942,16 @@ void config_postprocess(void)
 {
 	struct List *item, *tmp;
 	PgDatabase *db;
-
-	statlist_for_each_safe(item, &database_list, tmp) {
-		db = container_of(item, PgDatabase, head);
-		if (db->db_dead) {
-			kill_database(db);
-			continue;
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each_safe(item, &(threads[thread_id].database_list), tmp) {
+			db = container_of(item, PgDatabase, head);
+			if (db->db_dead) {
+				kill_database(db);
+				continue;
+			}
 		}
 	}
-
 	statlist_for_each_safe(item, &peer_list, tmp) {
 		db = container_of(item, PgDatabase, head);
 		if (db->db_dead) {
