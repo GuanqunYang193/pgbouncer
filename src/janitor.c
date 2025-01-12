@@ -927,7 +927,7 @@ void kill_peer(PgDatabase *db)
 		statlist_for_each_safe(item, &(threads[thread_id].peer_pool_list), tmp) {
 			pool = container_of(item, PgPool, head);
 			if (pool->db == db)
-				kill_peer_pool(&(threads[thread_id].peer_pool_list), pool);
+				kill_peer_pool(&(threads[thread_id].peer_pool_list), thread_id);
 		}
 	}
 	free(db->host);

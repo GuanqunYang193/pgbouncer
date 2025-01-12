@@ -52,7 +52,6 @@ typedef struct Thread {
     struct Slab *peer_pool_cache;
     struct Slab *var_list_cache;
     struct Slab *iobuf_cache;
-    struct Slab *user_cache;
     struct Slab *server_prepared_statement_cache;
 } Thread;
 

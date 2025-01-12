@@ -54,6 +54,7 @@ PgPreparedStatement *prepared_statements = NULL;
 
 struct Slab *db_cache;
 struct Slab *peer_cache;
+struct Slab *user_cache;
 struct Slab *credentials_cache;
 struct Slab *outstanding_request_cache;
 unsigned long long int last_pgsocket_id;
@@ -152,29 +153,24 @@ void init_objects(void)
 {
 	aatree_init(&user_tree, global_user_node_cmp, NULL);
 	aatree_init(&pam_user_tree, credentials_node_cmp, NULL);
+	user_cache = slab_create("user_cache", sizeof(PgGlobalUser), 0, NULL, USUAL_ALLOC);
 
 	printf("init_objects");
 	for (int i = 0; i < THREAD_NUM; i++) {		
         char pool_cache_name[MAX_SLAB_NAME];
 		char peer_pool_cache_name[MAX_SLAB_NAME];
-		char user_cache_name[MAX_SLAB_NAME];
 		
 		snprintf(pool_cache_name, MAX_SLAB_NAME, "pool_cache_thread_%d", i);
 		snprintf(peer_pool_cache_name, MAX_SLAB_NAME, "peer_pool_cache_thread_%d", i);
-		snprintf(user_cache_name, MAX_SLAB_NAME, "user_cache_thread_%d", i);
 
 		threads[i].pool_cache = slab_create(pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
 		threads[i].peer_pool_cache = slab_create(peer_pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
-		threads[i].user_cache = slab_create(user_cache_name, sizeof(PgGlobalUser), 0, NULL, USUAL_ALLOC);
 
 		if (!threads[i].pool_cache)
 			fatal("cannot create initial pool_cache");
 
 		if (!threads[i].peer_pool_cache)
 			fatal("cannot create initial peer_pool_cache");
-
-		if (!threads[i].user_cache)
-			fatal("cannot create initial user_cache");
 	}
 
 	credentials_cache = slab_create("credentials_cache", sizeof(PgCredentials), 0, NULL, USUAL_ALLOC);
@@ -182,7 +178,7 @@ void init_objects(void)
 	peer_cache = slab_create("peer_cache", sizeof(PgDatabase), 0, NULL, USUAL_ALLOC);
 	outstanding_request_cache = slab_create("outstanding_request_cache", sizeof(OutstandingRequest), 0, NULL, USUAL_ALLOC);
 
-	if (!db_cache || !peer_cache)
+	if (!user_cache ||!db_cache || !peer_cache)
 		fatal("cannot create initial caches");
 }
 
@@ -544,8 +540,7 @@ PgGlobalUser *update_global_user_passwd(PgGlobalUser *user, const char *passwd)
 
 static PgGlobalUser *add_new_global_user(const char *name, const char *passwd)
 {
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-	PgGlobalUser *user = slab_alloc(this_thread->user_cache);
+	PgGlobalUser *user = slab_alloc(user_cache);
 
 	if (!user)
 		return NULL;
@@ -759,7 +754,6 @@ static PgPool *new_pool(PgDatabase *db, PgCredentials *user_credentials)
 	list_append(&user_credentials->global_user->pool_list, &pool->map_head);
 
 	/* keep pools in db/user order to make stats faster */
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	put_in_order(&pool->head, &(this_thread->pool_list), cmp_pool);
 	
 	return pool;
@@ -2743,8 +2737,6 @@ void objects_cleanup(void)
 		threads[i].peer_pool_cache = NULL;
 		slab_destroy(threads[i].pool_cache);
 		threads[i].pool_cache = NULL;
-		slab_destroy(threads[i].user_cache);
-		threads[i].user_cache = NULL;
 		slab_destroy(threads[i].iobuf_cache);
 		threads[i].iobuf_cache = NULL;
 		slab_destroy(threads[i].var_list_cache);
@@ -2757,6 +2749,8 @@ void objects_cleanup(void)
 	db_cache = NULL;
 	slab_destroy(peer_cache);
 	peer_cache = NULL;
+	slab_destroy(user_cache);
+	user_cache = NULL;
 	slab_destroy(credentials_cache);
 	credentials_cache = NULL;
 	slab_destroy(outstanding_request_cache);
