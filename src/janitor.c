@@ -713,9 +713,9 @@ static void cleanup_inactive_autodatabases(void)
 
 	if (cf_autodb_idle_timeout <= 0)
 		return;
-
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	/* now kill the old ones */
-	statlist_for_each_safe(item, &autodatabase_idle_list, tmp) {
+	statlist_for_each_safe(item, &(this_thread->autodatabase_idle_list), tmp) {
 		db = container_of(item, PgDatabase, head);
 		if (db->db_paused)
 			continue;
@@ -793,7 +793,7 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 				continue;
 			db->inactive_time = get_cached_time();
 			statlist_remove(&(this_thread->database_list), &db->head);
-			statlist_append(&autodatabase_idle_list, &db->head);
+			statlist_append(&(this_thread->autodatabase_idle_list), &db->head);
 		}
 	}
 	cleanup_inactive_autodatabases();
@@ -900,7 +900,7 @@ void kill_database(PgDatabase *db)
 		slab_free(credentials_cache, db->forced_user_credentials);
 	free(db->connect_query);
 	if (db->inactive_time) {
-		statlist_remove(&autodatabase_idle_list, &db->head);
+		statlist_remove(&(this_thread->autodatabase_idle_list), &db->head);
 	} else {
 		statlist_remove(&(this_thread->database_list), &db->head);
 	}

@@ -73,8 +73,6 @@ unsigned long long int last_pgsocket_id;
 static STATLIST(justfree_client_list);
 static STATLIST(justfree_server_list);
 
-/* init autodb idle list */
-STATLIST(autodatabase_idle_list);
 
 const char *replication_type_parameters[] = {
 	[REPLICATION_NONE] = "no",
@@ -481,9 +479,8 @@ PgDatabase *register_auto_database(const char *name, int thread_id)
 	if (!cf_autodb_connstr)
 		return NULL;
 
-	if (!parse_database(NULL, name, cf_autodb_connstr))
+	if (!parse_database(NULL, name, cf_autodb_connstr, thread_id))
 		return NULL;
-
 	db = find_database(name, thread_id);
 	if (db) {
 		db->db_auto = true;
@@ -635,11 +632,11 @@ PgDatabase *find_database(const char *name, int thread_id)
 			return db;
 	}
 	/* also trying to find in idle autodatabases list */
-	statlist_for_each_safe(item, &autodatabase_idle_list, tmp) {
+	statlist_for_each_safe(item, &(threads[thread_id].autodatabase_idle_list), tmp) {
 		db = container_of(item, PgDatabase, head);
 		if (strcmp(db->name, name) == 0) {
 			db->inactive_time = 0;
-			statlist_remove(&autodatabase_idle_list, &db->head);
+			statlist_remove(&(threads[thread_id].autodatabase_idle_list), &db->head);
 			put_in_order(&db->head, &(threads[thread_id].database_list), cmp_database);
 			return db;
 		}
@@ -1744,7 +1741,7 @@ static void dns_connect(struct PgSocket *server)
 			server->dns_token = tk;
 		goto cleanup;
 	}
-
+	
 	connect_server(server, sa, sa_len);
 cleanup:
 	free(host_copy);
@@ -2361,7 +2358,7 @@ bool use_server_socket(int fd, PgAddr *addr,
 		       const char *scram_server_key, int scram_server_key_len,
 			   int thread_id)
 {
-	
+
 	PgDatabase *db = find_database(dbname, thread_id);
 	PgCredentials *credentials;
 	PgPool *pool;
@@ -2648,13 +2645,14 @@ void objects_cleanup(void)
 	reuse_just_freed_objects();
 	reuse_just_freed_objects();
 
-	statlist_for_each_safe(item, &autodatabase_idle_list, tmp) {
-		db = container_of(item, PgDatabase, head);
-		kill_database(db);
-	}
+
 	
 	int thread_id;
 	FOR_EACH_THREAD(thread_id){
+		statlist_for_each_safe(item, &(threads[thread_id].autodatabase_idle_list), tmp) {
+			db = container_of(item, PgDatabase, head);
+			kill_database(db);
+		}
 		statlist_for_each_safe(item, &(threads[thread_id].database_list), tmp) {
 			db = container_of(item, PgDatabase, head);
 			kill_database(db);
@@ -2683,7 +2681,7 @@ void objects_cleanup(void)
 		memset(&(threads[i].pool_list), 0, sizeof (threads[i].pool_list));
 		memset(&pam_user_tree, 0, sizeof (pam_user_tree));
 		memset(&(user_tree), 0, sizeof user_tree);
-		memset(&(autodatabase_idle_list), 0, sizeof (autodatabase_idle_list));
+		memset(&(threads[i].autodatabase_idle_list), 0, sizeof (threads[i].autodatabase_idle_list));
 	}
 
 

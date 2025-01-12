@@ -353,7 +353,7 @@ static const struct CfSect config_sects [] = {
 		.key_list = bouncer_params,
 	}, {
 		.sect_name = "databases",
-		.set_key = parse_database,
+		.set_key = parse_database_multithread,
 	}, {
 		.sect_name = "users",
 		.set_key = parse_user,

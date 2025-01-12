@@ -45,6 +45,7 @@ typedef struct Thread {
     struct StatList peer_pool_list;
     struct SignalEvent signal_event;
     struct StatList database_list;
+    struct StatList autodatabase_idle_list;
 
     
 } Thread;

@@ -19,7 +19,6 @@
 extern struct StatList user_list;
 extern struct AATree user_tree;
 extern struct StatList peer_list;
-extern struct StatList autodatabase_idle_list;
 extern struct Slab *client_cache;
 extern struct Slab *server_cache;
 extern struct Slab *db_cache;
