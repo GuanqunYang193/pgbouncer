@@ -56,7 +56,6 @@ struct Slab *db_cache;
 struct Slab *peer_cache;
 struct Slab *user_cache;
 struct Slab *credentials_cache;
-struct Slab *outstanding_request_cache;
 unsigned long long int last_pgsocket_id;
 
 /*
@@ -155,7 +154,6 @@ void init_objects(void)
 	aatree_init(&pam_user_tree, credentials_node_cmp, NULL);
 	user_cache = slab_create("user_cache", sizeof(PgGlobalUser), 0, NULL, USUAL_ALLOC);
 
-	printf("init_objects");
 	for (int i = 0; i < THREAD_NUM; i++) {		
         char pool_cache_name[MAX_SLAB_NAME];
 		char peer_pool_cache_name[MAX_SLAB_NAME];
@@ -166,17 +164,21 @@ void init_objects(void)
 		threads[i].pool_cache = slab_create(pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
 		threads[i].peer_pool_cache = slab_create(peer_pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
 
+		threads[i].outstanding_request_cache = slab_create("outstanding_request_cache", sizeof(OutstandingRequest), 0, NULL, USUAL_ALLOC);
+
 		if (!threads[i].pool_cache)
 			fatal("cannot create initial pool_cache");
 
 		if (!threads[i].peer_pool_cache)
 			fatal("cannot create initial peer_pool_cache");
+		
+		if (!threads[i].outstanding_request_cache)
+			fatal("cannot create initial outstanding_request_cache");
 	}
 
 	credentials_cache = slab_create("credentials_cache", sizeof(PgCredentials), 0, NULL, USUAL_ALLOC);
 	db_cache = slab_create("db_cache", sizeof(PgDatabase), 0, NULL, USUAL_ALLOC);
 	peer_cache = slab_create("peer_cache", sizeof(PgDatabase), 0, NULL, USUAL_ALLOC);
-	outstanding_request_cache = slab_create("outstanding_request_cache", sizeof(OutstandingRequest), 0, NULL, USUAL_ALLOC);
 
 	if (!user_cache ||!db_cache || !peer_cache)
 		fatal("cannot create initial caches");
@@ -191,7 +193,6 @@ static void do_iobuf_reset(void *arg)
 /* initialization after config loading */
 void init_caches(void)
 {
-	printf("init_caches");
 
 	for (int i = 0; i < THREAD_NUM; i++) {
         char server_cache_name[MAX_SLAB_NAME];
@@ -229,16 +230,15 @@ static void server_free(PgSocket *server)
 {
 	struct List *el, *tmp_l;
 	OutstandingRequest *request;
-
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	statlist_for_each_safe(el, &server->outstanding_requests, tmp_l) {
 		request = container_of(el, OutstandingRequest, node);
 		statlist_remove(&server->canceling_clients, el);
 		if (request->server_ps)
 			free_server_prepared_statement(request->server_ps);
-		slab_free(outstanding_request_cache, request);
+		slab_free(this_thread->outstanding_request_cache, request);
 	}
 
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	free_server_prepared_statements(server);
 	varcache_clean(&server->vars);
 	slab_free(this_thread->var_list_cache, server->vars.var_list);
@@ -1093,8 +1093,9 @@ bool add_outstanding_request(PgSocket *client, char type, ResponseAction action)
 			   type);
 		return queue_fake_response(client, type);
 	}
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 
-	request = slab_alloc(outstanding_request_cache);
+	request = slab_alloc(this_thread->outstanding_request_cache);
 	if (request == NULL)
 		return false;
 	request->type = type;
@@ -1114,6 +1115,7 @@ bool add_outstanding_request(PgSocket *client, char type, ResponseAction action)
 bool pop_outstanding_request(PgSocket *server, const char types[], bool *skip)
 {
 	OutstandingRequest *request;
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	struct List *item = statlist_first(&server->outstanding_requests);
 	if (!item)
 		return false;
@@ -1139,7 +1141,7 @@ bool pop_outstanding_request(PgSocket *server, const char types[], bool *skip)
 	if (request->server_ps != NULL) {
 		free_server_prepared_statement(request->server_ps);
 	}
-	slab_free(outstanding_request_cache, request);
+	slab_free(this_thread->outstanding_request_cache, request);
 	return true;
 }
 
@@ -1151,6 +1153,7 @@ bool pop_outstanding_request(PgSocket *server, const char types[], bool *skip)
 bool clear_outstanding_requests_until(PgSocket *server, const char types[])
 {
 	struct List *item, *tmp;
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	statlist_for_each_safe(item, &server->outstanding_requests, tmp) {
 		OutstandingRequest *request = container_of(item, OutstandingRequest, node);
 		char type = request->type;
@@ -1173,7 +1176,7 @@ bool clear_outstanding_requests_until(PgSocket *server, const char types[])
 				   HASH_COUNT(server->server_prepared_statements));
 		}
 		statlist_remove(&server->outstanding_requests, item);
-		slab_free(outstanding_request_cache, request);
+		slab_free(this_thread->outstanding_request_cache, request);
 
 		if (strchr(types, type))
 			break;
@@ -2743,6 +2746,8 @@ void objects_cleanup(void)
 		threads[i].var_list_cache = NULL;
 		slab_destroy(threads[i].server_prepared_statement_cache);
 		threads[i].server_prepared_statement_cache = NULL;
+		slab_destroy(threads[i].outstanding_request_cache);
+		threads[i].outstanding_request_cache = NULL;
 	}
 
 	slab_destroy(db_cache);
@@ -2753,6 +2758,4 @@ void objects_cleanup(void)
 	user_cache = NULL;
 	slab_destroy(credentials_cache);
 	credentials_cache = NULL;
-	slab_destroy(outstanding_request_cache);
-	outstanding_request_cache = NULL;
 }

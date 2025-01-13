@@ -23,7 +23,6 @@ extern struct Slab *db_cache;
 extern struct Slab *peer_cache;
 extern struct Slab *user_cache;
 extern struct Slab *credentials_cache;
-extern struct Slab *outstanding_request_cache;
 extern PgPreparedStatement *prepared_statements;
 
 extern unsigned long long int last_pgsocket_id;

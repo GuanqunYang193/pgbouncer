@@ -53,6 +53,7 @@ typedef struct Thread {
     struct Slab *var_list_cache;
     struct Slab *iobuf_cache;
     struct Slab *server_prepared_statement_cache;
+    struct Slab *outstanding_request_cache;
 } Thread;
 
 typedef struct ClientRequest {

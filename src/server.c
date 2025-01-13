@@ -22,6 +22,7 @@
 
 #include "bouncer.h"
 #include "usual/time.h"
+#include "multithread.h"
 
 #include <usual/slab.h>
 
@@ -365,6 +366,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 	bool ignore_packet = false;
 
 	Assert(!server->pool->db->admin);
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 
 	switch (pkt->type) {
 	default:
@@ -628,7 +630,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 					disconnect_server(client->link, true, "out of memory");
 					return false;
 				}
-				slab_free(outstanding_request_cache, request);
+				slab_free(this_thread->outstanding_request_cache, request);
 			}
 		}
 	} else {
