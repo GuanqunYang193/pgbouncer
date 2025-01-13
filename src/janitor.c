@@ -912,7 +912,7 @@ void kill_database(PgDatabase *db)
 		free((void *)db->auth_query);
 
 	aatree_destroy(&db->user_tree);
-	slab_free(db_cache, db);
+	slab_free(this_thread->db_cache, db);
 }
 
 void kill_peer(PgDatabase *db)
