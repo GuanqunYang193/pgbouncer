@@ -474,7 +474,7 @@ bool parse_database(void *base, const char *name, const char *connstr, int threa
 	}
 
 	if (auth_username != NULL) {
-		db->auth_user_credentials = find_or_add_new_global_credentials(auth_username, "");
+		db->auth_user_credentials = find_or_add_new_global_credentials(auth_username, "", thread_id);
 		if (!db->auth_user_credentials)
 			goto fail;
 	} else if (db->auth_user_credentials) {
@@ -483,7 +483,7 @@ bool parse_database(void *base, const char *name, const char *connstr, int threa
 
 	/* if user is forced, create fake object for it */
 	if (username != NULL) {
-		if (!force_user_credentials(db, username, password))
+		if (!force_user_credentials(db, username, password, thread_id))
 			log_warning("db setup failed, trying to continue");
 	} else if (db->forced_user_credentials) {
 		log_warning("losing forced user not supported,"
@@ -564,7 +564,10 @@ bool parse_user(void *base, const char *name, const char *connstr)
 		}
 	}
 
-	user = find_or_add_new_global_user(name, "");
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		user = find_or_add_new_global_user(name, "", thread_id);
+	}
 	if (!user) {
 		log_error("cannot create user, no memory?");
 		goto fail;
@@ -620,7 +623,7 @@ static void copy_quoted(char *dst, const char *src, int len)
 /* This function is only called when parsing the auth file, so
    all users added by this function do not have a dynamic password,
    by definition. If the password is empty, so be it. */
-static void unquote_add_authfile_user(const char *username, const char *password)
+static void unquote_add_authfile_user(const char *username, const char *password, int thread_id)
 {
 	char real_user[MAX_USERNAME];
 	char real_passwd[MAX_PASSWORD];
@@ -629,7 +632,7 @@ static void unquote_add_authfile_user(const char *username, const char *password
 	copy_quoted(real_user, username, sizeof(real_user));
 	copy_quoted(real_passwd, password, sizeof(real_passwd));
 
-	user = find_or_add_new_global_user(real_user, real_passwd);
+	user = find_or_add_new_global_user(real_user, real_passwd, thread_id);
 	if (!user) {
 		log_warning("cannot create user, no memory");
 		return;
@@ -681,10 +684,12 @@ bool loader_users_check(void)
 static void disable_users(void)
 {
 	struct List *item;
-	
-	statlist_for_each(item, &user_list) {
-		PgGlobalUser *user = container_of(item, PgGlobalUser, head);
-		user->credentials.passwd[0] = 0;
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each(item, &(threads[thread_id].user_list)) {
+			PgGlobalUser *user = container_of(item, PgGlobalUser, head);
+			user->credentials.passwd[0] = 0;
+		}
 	}
 }
 
@@ -754,8 +759,10 @@ bool load_auth_file(const char *fn)
 		*p++ = 0;	/* tag password end */
 
 		/* send them away */
-		unquote_add_authfile_user(user, password);
-
+		int thread_id;
+		FOR_EACH_THREAD(thread_id){
+			unquote_add_authfile_user(user, password, thread_id);
+		}
 		/* skip rest of the line */
 		while (*p && *p != '\n') p++;
 	}

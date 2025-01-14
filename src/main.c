@@ -627,7 +627,11 @@ static void write_pidfile(void)
 static void check_limits(void)
 {
 	struct rlimit lim;
-	int total_users = statlist_count(&user_list);
+	int total_users = 0;
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+	 	statlist_count(&(threads[thread_id].user_list));
+	}
 	int fd_count;
 	int err;
 	struct List *item;
@@ -646,7 +650,6 @@ static void check_limits(void)
 
 	/* calculate theoretical max, +10 is just in case */
 	fd_count = cf_max_client_conn + 10;
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].database_list)) {
 			db = container_of(item, PgDatabase, head);

@@ -22,7 +22,7 @@
 
 #include "bouncer.h"
 #include "scram.h"
-
+#include "multithread.h"
 /*
  * parse protocol header from struct MBuf
  */
@@ -327,10 +327,11 @@ static PgCredentials *get_srv_psw(PgSocket *server)
 {
 	PgDatabase *db = server->pool->db;
 	PgCredentials *credentials = server->pool->user_credentials;
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 
 	/* if forced user without password, use userlist psw */
 	if (!credentials->passwd[0] && db->forced_user_credentials) {
-		PgCredentials *c2 = find_global_credentials(credentials->name);
+		PgCredentials *c2 = find_global_credentials(credentials->name, this_thread->thread_id);
 		if (c2)
 			return c2;
 	}

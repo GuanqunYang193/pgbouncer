@@ -1,4 +1,5 @@
 #include <usual/statlist.h>
+#include <usual/aatree.h>
 
 #include <pthread.h>
 #include <event2/event.h>
@@ -46,7 +47,9 @@ typedef struct Thread {
     struct SignalEvent signal_event;
     struct StatList database_list;
     struct StatList autodatabase_idle_list;
+    struct StatList user_list;
     struct Slab *client_cache;
+    struct Slab *user_cache;
     struct Slab *server_cache;
     struct Slab *pool_cache;
     struct Slab *peer_pool_cache;
@@ -55,6 +58,17 @@ typedef struct Thread {
     struct Slab *iobuf_cache;
     struct Slab *server_prepared_statement_cache;
     struct Slab *outstanding_request_cache;
+    
+    /* All locally defined users (in auth_file) are kept here. */
+    struct AATree user_tree;
+
+    /*
+    * All PAM users are kept here. We need to differentiate two user
+    * lists to avoid user clashing for different authentication types,
+    * and because pam_user_tree is closer to PgDatabase.user_tree in
+    * logic.
+    */
+    struct AATree pam_user_tree;
 } Thread;
 
 typedef struct ClientRequest {

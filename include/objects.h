@@ -16,11 +16,8 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-extern struct StatList user_list;
-extern struct AATree user_tree;
 extern struct StatList peer_list;
 extern struct Slab *peer_cache;
-extern struct Slab *user_cache;
 extern struct Slab *credentials_cache;
 extern PgPreparedStatement *prepared_statements;
 
@@ -29,8 +26,8 @@ extern unsigned long long int last_pgsocket_id;
 PgDatabase *find_peer(int peer_id);
 PgDatabase *find_database(const char *name, int thread_id);
 PgDatabase *find_or_register_database(PgSocket *connection, const char *name, int thread_id);
-PgGlobalUser *find_global_user(const char *name);
-PgCredentials *find_global_credentials(const char *name);
+PgGlobalUser *find_global_user(const char *name, int thread_id);
+PgCredentials *find_global_credentials(const char *name, int thread_id);
 PgPool *get_pool(PgDatabase *db, PgCredentials *user_credentials);
 PgPool *get_peer_pool(PgDatabase *);
 PgSocket *compare_connections_by_time(PgSocket *lhs, PgSocket *rhs);
@@ -51,18 +48,18 @@ void disconnect_client_sqlstate(PgSocket *client, bool notify, const char *sqlst
 PgDatabase * add_peer(const char *name, int peer_id) _MUSTCHECK;
 PgDatabase * add_database(const char *name, int thread_id) _MUSTCHECK;
 PgDatabase *register_auto_database(const char *name, int thread_id);
-PgCredentials * add_dynamic_credentials(PgDatabase *db, const char *name, const char *passwd) _MUSTCHECK;
-PgCredentials * force_user_credentials(PgDatabase *db, const char *username, const char *passwd) _MUSTCHECK;
+PgCredentials * add_dynamic_credentials(PgDatabase *db, const char *name, const char *passwd, int thread_id) _MUSTCHECK;
+PgCredentials * force_user_credentials(PgDatabase *db, const char *username, const char *passwd, int thread_id) _MUSTCHECK;
 bool add_outstanding_request(PgSocket *client, char type, ResponseAction action) _MUSTCHECK;
 bool pop_outstanding_request(PgSocket *client, const char types[], bool *skip);
 bool clear_outstanding_requests_until(PgSocket *server, const char types[]) _MUSTCHECK;
 bool queue_fake_response(PgSocket *client, char request_type) _MUSTCHECK;
 
 PgGlobalUser * update_global_user_passwd(PgGlobalUser *user, const char *passwd) _MUSTCHECK;
-PgGlobalUser * find_or_add_new_global_user(const char *name, const char *passwd) _MUSTCHECK;
-PgCredentials * find_or_add_new_global_credentials(const char *name, const char *passwd) _MUSTCHECK;
+PgGlobalUser * find_or_add_new_global_user(const char *name, const char *passwd, int thread_id) _MUSTCHECK;
+PgCredentials * find_or_add_new_global_credentials(const char *name, const char *passwd, int thread_id) _MUSTCHECK;
 
-PgCredentials * add_pam_credentials(const char *name, const char *passwd) _MUSTCHECK;
+PgCredentials * add_pam_credentials(const char *name, const char *passwd, int thread_id) _MUSTCHECK;
 
 void accept_cancel_request(PgSocket *req);
 bool forward_cancel_request(PgSocket *server);

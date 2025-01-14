@@ -357,12 +357,33 @@ static bool show_one_fd(PgSocket *admin, PgSocket *sk)
 	if (!mbuf_get_uint64be(&tmp, &ckey))
 		return false;
 
-	if (sk->pool && sk->pool->db->auth_user_credentials && sk->login_user_credentials && !find_global_user(sk->login_user_credentials->name))
-		password = sk->login_user_credentials->passwd;
+	if (sk->pool && sk->pool->db->auth_user_credentials && sk->login_user_credentials){
+		int thread_id;
+		bool user_found = true;
+		FOR_EACH_THREAD(thread_id){
+			if(!find_global_user(sk->login_user_credentials->name, thread_id)){
+				user_found = false;
+			}
+		}
+		if(!user_found)
+			password = sk->login_user_credentials->passwd;
+
+	}
 
 	/* PAM requires passwords as well since they are not stored externally */
-	if (cf_auth_type == AUTH_TYPE_PAM && !find_global_user(sk->login_user_credentials->name))
-		password = sk->login_user_credentials->passwd;
+	if (cf_auth_type == AUTH_TYPE_PAM ){
+		// FIXME wrong user searching
+		int thread_id;
+		bool user_found = true;
+		FOR_EACH_THREAD(thread_id){
+			if(!find_global_user(sk->login_user_credentials->name, thread_id)){
+				user_found = false;
+			}
+		}
+		if(!user_found)
+			password = sk->login_user_credentials->passwd;
+
+	}
 
 	if (sk->pool && sk->pool->user_credentials && sk->pool->user_credentials->has_scram_keys)
 		send_scram_keys = true;
@@ -602,6 +623,8 @@ static bool admin_show_lists(PgSocket *admin, const char *arg)
 	int total_used_clients = 0;
 	int total_free_servers = 0;
 	int total_used_servers = 0;
+	// FIXME wrong calculation
+	int total_user_list = 0;
 	FOR_EACH_THREAD(thread_id){
 		total_login_clients += statlist_count(&(threads[thread_id].login_client_list));
 		total_pool_list += statlist_count(&(threads[thread_id].pool_list));
@@ -611,9 +634,10 @@ static bool admin_show_lists(PgSocket *admin, const char *arg)
 		total_used_clients += slab_active_count(&(threads[thread_id].client_cache));
 		total_free_servers += slab_free_count(&(threads[thread_id].server_cache));
 		total_used_servers += slab_active_count(&(threads[thread_id].server_cache));
+		total_user_list += statlist_count(&(threads[thread_id].user_list));
 	}
 	SENDLIST("databases", database_count);
-	SENDLIST("users", statlist_count(&user_list));
+	SENDLIST("users", total_user_list);
 	SENDLIST("peers", statlist_count(&peer_list));
 	SENDLIST("pools", total_pool_list);
 	SENDLIST("peer_pools", total_peer_pool_list);
@@ -654,27 +678,31 @@ static bool admin_show_users(PgSocket *admin, const char *arg)
 		buf, "ssssiiii", "name", "pool_size", "reserve_pool_size", "pool_mode", "max_user_connections", "current_connections",
 		"max_user_client_connections", "current_client_connections");
 
-	statlist_for_each(item, &user_list) {
-		PgGlobalUser *user = container_of(item, PgGlobalUser, head);
-		if (user->pool_size >= 0)
-			snprintf(pool_size_str, sizeof(pool_size_str), "%9d", user->pool_size);
-		if (user->res_pool_size >= 0)
-			snprintf(res_pool_size_str, sizeof(res_pool_size_str), "%9d", user->res_pool_size);
-		pool_mode_str = NULL;
+	// FIXME wrong user
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each(item, &(threads[thread_id].user_list)) {
+			PgGlobalUser *user = container_of(item, PgGlobalUser, head);
+			if (user->pool_size >= 0)
+				snprintf(pool_size_str, sizeof(pool_size_str), "%9d", user->pool_size);
+			if (user->res_pool_size >= 0)
+				snprintf(res_pool_size_str, sizeof(res_pool_size_str), "%9d", user->res_pool_size);
+			pool_mode_str = NULL;
 
-		cv.value_p = &user->pool_mode;
-		if (user->pool_mode != POOL_INHERIT)
-			pool_mode_str = cf_get_lookup(&cv);
+			cv.value_p = &user->pool_mode;
+			if (user->pool_mode != POOL_INHERIT)
+				pool_mode_str = cf_get_lookup(&cv);
 
-		pktbuf_write_DataRow(buf, "ssssiiii", user->credentials.name,
-					pool_size_str,
-					res_pool_size_str,
-					pool_mode_str,
-					user_max_connections(user),
-					user->connection_count,
-					user_client_max_connections(user),
-					user->client_connection_count
-					);
+			pktbuf_write_DataRow(buf, "ssssiiii", user->credentials.name,
+						pool_size_str,
+						res_pool_size_str,
+						pool_mode_str,
+						user_max_connections(user),
+						user->connection_count,
+						user_client_max_connections(user),
+						user->client_connection_count
+						);
+		}
 	}
 
 	admin_flush(admin, buf, "SHOW");
@@ -1990,7 +2018,7 @@ void admin_setup(void)
 	db->pool_size = 2;
 	db->admin = true;
 	db->pool_mode = POOL_STMT;
-	if (!force_user_credentials(db, "pgbouncer", ""))
+	if (!force_user_credentials(db, "pgbouncer", "", this_thread->thread_id))
 		die("no mem on startup - cannot alloc pgbouncer user");
 
 	/* fake pool */
@@ -2000,7 +2028,7 @@ void admin_setup(void)
 	admin_pool = pool;
 
 	/* find an existing user or create a new fake user with disabled password */
-	user = find_or_add_new_global_user("pgbouncer", "");
+	user = find_or_add_new_global_user("pgbouncer", "", this_thread->thread_id);
 	if (!user) {
 		die("cannot create admin user?");
 	}

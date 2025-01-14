@@ -547,7 +547,7 @@ bool set_pool(PgSocket *client, const char *dbname, const char *username, const 
 			return false;
 		}
 		/* Password will be set after successful authentication when not in takeover mode */
-		client->login_user_credentials = add_pam_credentials(username, password);
+		client->login_user_credentials = add_pam_credentials(username, password, this_thread->thread_id);
 		if (!check_db_connection_count(client))
 			return false;
 		if (!client->login_user_credentials) {
@@ -559,7 +559,7 @@ bool set_pool(PgSocket *client, const char *dbname, const char *username, const 
 			return false;
 		}
 	} else {
-		client->login_user_credentials = find_global_credentials(username);
+		client->login_user_credentials = find_global_credentials(username, this_thread->thread_id);
 
 		if (!check_db_connection_count(client))
 			return false;
@@ -576,7 +576,7 @@ bool set_pool(PgSocket *client, const char *dbname, const char *username, const 
 			 * see if the global auth_user is set and use that.
 			 */
 			if (!client->db->auth_user_credentials && cf_auth_user) {
-				client->db->auth_user_credentials = find_or_add_new_global_credentials(cf_auth_user, "");
+				client->db->auth_user_credentials = find_or_add_new_global_credentials(cf_auth_user, "", this_thread->thread_id);
 				if (client->db->auth_user_credentials == NULL) {
 					slog_error(client, "set_pool(): failed to allocate a new global credentials");
 					disconnect_client(client, true, "bouncer resources exhaustion");
@@ -588,7 +588,7 @@ bool set_pool(PgSocket *client, const char *dbname, const char *username, const 
 					slog_debug(client, "not running auth_query because database is fake");
 				} else {
 					if (takeover) {
-						client->login_user_credentials = add_dynamic_credentials(client->db, username, password);
+						client->login_user_credentials = add_dynamic_credentials(client->db, username, password, this_thread->thread_id);
 
 						if (!check_db_connection_count(client))
 							return false;
@@ -625,6 +625,7 @@ bool handle_auth_query_response(PgSocket *client, PktHdr *pkt)
 	const char *username, *password;
 	PgCredentials credentials;
 	PgSocket *server = client->link;
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 
 	switch (pkt->type) {
 	case PqMsg_RowDescription:
@@ -684,7 +685,7 @@ bool handle_auth_query_response(PgSocket *client, PktHdr *pkt)
 		memcpy(credentials.passwd, password, length);
 
 		slog_debug(client, "successfully parsed auth_query response for user %s", credentials.name);
-		client->login_user_credentials = add_dynamic_credentials(client->db, credentials.name, credentials.passwd);
+		client->login_user_credentials = add_dynamic_credentials(client->db, credentials.name, credentials.passwd, this_thread->thread_id);
 		if (!check_user_connection_count(client)) {
 			return false;
 		}
