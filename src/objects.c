@@ -52,7 +52,6 @@ struct AATree pam_user_tree;
  */
 PgPreparedStatement *prepared_statements = NULL;
 
-struct Slab *db_cache;
 struct Slab *peer_cache;
 struct Slab *user_cache;
 struct Slab *credentials_cache;
@@ -157,12 +156,15 @@ void init_objects(void)
 	for (int i = 0; i < THREAD_NUM; i++) {		
         char pool_cache_name[MAX_SLAB_NAME];
 		char peer_pool_cache_name[MAX_SLAB_NAME];
+		char db_cache_name[MAX_SLAB_NAME];
 		
 		snprintf(pool_cache_name, MAX_SLAB_NAME, "pool_cache_thread_%d", i);
 		snprintf(peer_pool_cache_name, MAX_SLAB_NAME, "peer_pool_cache_thread_%d", i);
+		snprintf(db_cache_name, MAX_SLAB_NAME, "db_cache_thread_%d", i);
 
 		threads[i].pool_cache = slab_create(pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
 		threads[i].peer_pool_cache = slab_create(peer_pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
+		threads[i].db_cache = slab_create(db_cache_name, sizeof(PgDatabase), 0, NULL, USUAL_ALLOC);
 
 		threads[i].outstanding_request_cache = slab_create("outstanding_request_cache", sizeof(OutstandingRequest), 0, NULL, USUAL_ALLOC);
 
@@ -171,16 +173,18 @@ void init_objects(void)
 
 		if (!threads[i].peer_pool_cache)
 			fatal("cannot create initial peer_pool_cache");
+
+		if (!threads[i].db_cache)
+			fatal("cannot create initial db_cache");
 		
 		if (!threads[i].outstanding_request_cache)
 			fatal("cannot create initial outstanding_request_cache");
 	}
 
 	credentials_cache = slab_create("credentials_cache", sizeof(PgCredentials), 0, NULL, USUAL_ALLOC);
-	db_cache = slab_create("db_cache", sizeof(PgDatabase), 0, NULL, USUAL_ALLOC);
 	peer_cache = slab_create("peer_cache", sizeof(PgDatabase), 0, NULL, USUAL_ALLOC);
 
-	if (!user_cache ||!db_cache || !peer_cache)
+	if (!user_cache || !peer_cache)
 		fatal("cannot create initial caches");
 }
 
@@ -494,14 +498,14 @@ PgDatabase *add_database(const char *name, int thread_id)
 
 	/* create new object if needed */
 	if (db == NULL) {
-		db = slab_alloc(db_cache);
+		db = slab_alloc(threads[thread_id].db_cache);
 		if (!db)
 			return NULL;
 
 		list_init(&db->head);
 		if (strlcpy(db->name, name, sizeof(db->name)) >= sizeof(db->name)) {
 			log_warning("too long db name: %s", name);
-			slab_free(db_cache, db);
+			slab_free(threads[thread_id].db_cache, db);
 			return NULL;
 		}
 		aatree_init(&db->user_tree, credentials_node_cmp, credentials_node_release);
@@ -2740,6 +2744,8 @@ void objects_cleanup(void)
 		threads[i].peer_pool_cache = NULL;
 		slab_destroy(threads[i].pool_cache);
 		threads[i].pool_cache = NULL;
+		slab_destroy(threads[i].db_cache);
+		threads[i].db_cache = NULL;
 		slab_destroy(threads[i].iobuf_cache);
 		threads[i].iobuf_cache = NULL;
 		slab_destroy(threads[i].var_list_cache);
@@ -2750,8 +2756,7 @@ void objects_cleanup(void)
 		threads[i].outstanding_request_cache = NULL;
 	}
 
-	slab_destroy(db_cache);
-	db_cache = NULL;
+	
 	slab_destroy(peer_cache);
 	peer_cache = NULL;
 	slab_destroy(user_cache);
