@@ -69,6 +69,15 @@ typedef struct Thread {
     * logic.
     */
     struct AATree pam_user_tree;
+
+    /*
+    * libevent may still report events when event_del()
+    * is called from somewhere else.  So hide just freed
+    * PgSockets for one loop.
+    */
+    struct StatList justfree_client_list;
+    struct StatList justfree_server_list;
+    
 } Thread;
 
 typedef struct ClientRequest {

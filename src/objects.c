@@ -46,13 +46,7 @@ struct Slab *peer_cache;
 struct Slab *credentials_cache;
 unsigned long long int last_pgsocket_id;
 
-/*
- * libevent may still report events when event_del()
- * is called from somewhere else.  So hide just freed
- * PgSockets for one loop.
- */
-static STATLIST(justfree_client_list);
-static STATLIST(justfree_server_list);
+
 
 
 const char *replication_type_parameters[] = {
@@ -253,7 +247,7 @@ void change_client_state(PgSocket *client, SocketState newstate)
 	case CL_FREE:
 		break;
 	case CL_JUSTFREE:
-		statlist_remove(&justfree_client_list, &client->head);
+		statlist_remove(&(this_thread->justfree_client_list), &client->head);
 		break;
 	case CL_LOGIN:
 		if (newstate == CL_WAITING)
@@ -288,7 +282,7 @@ void change_client_state(PgSocket *client, SocketState newstate)
 		client_free(client);
 		break;
 	case CL_JUSTFREE:
-		statlist_append(&justfree_client_list, &client->head);
+		statlist_append(&(this_thread->justfree_client_list), &client->head);
 		break;
 	case CL_LOGIN:
 		statlist_append(&(this_thread->login_client_list), &client->head);
@@ -317,12 +311,13 @@ void change_server_state(PgSocket *server, SocketState newstate)
 {
 	PgPool *pool = server->pool;
 
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	/* remove from old location */
 	switch (server->state) {
 	case SV_FREE:
 		break;
 	case SV_JUSTFREE:
-		statlist_remove(&justfree_server_list, &server->head);
+		statlist_remove(&(this_thread->justfree_server_list), &server->head);
 		break;
 	case SV_LOGIN:
 		statlist_remove(&pool->new_server_list, &server->head);
@@ -357,7 +352,7 @@ void change_server_state(PgSocket *server, SocketState newstate)
 		server_free(server);
 		break;
 	case SV_JUSTFREE:
-		statlist_append(&justfree_server_list, &server->head);
+		statlist_append(&(this_thread->justfree_server_list), &server->head);
 		break;
 	case SV_LOGIN:
 		statlist_append(&pool->new_server_list, &server->head);
@@ -2653,15 +2648,15 @@ void reuse_just_freed_objects(void)
 	struct List *tmp, *item;
 	PgSocket *sk;
 	bool close_works = true;
-
+	
 	/*
 	 * event_del() may fail because of ENOMEM for event handlers
 	 * that need only changes sent to kernel on each loop.
 	 *
 	 * Keep open sbufs in justfree lists until successful.
 	 */
-
-	statlist_for_each_safe(item, &justfree_client_list, tmp) {
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	statlist_for_each_safe(item, &(this_thread->justfree_client_list), tmp) {
 		sk = container_of(item, PgSocket, head);
 		if (sbuf_is_closed(&sk->sbuf)) {
 			change_client_state(sk, CL_FREE);
@@ -2669,7 +2664,7 @@ void reuse_just_freed_objects(void)
 			close_works = sbuf_close(&sk->sbuf);
 		}
 	}
-	statlist_for_each_safe(item, &justfree_server_list, tmp) {
+	statlist_for_each_safe(item, &(this_thread->justfree_server_list), tmp) {
 		sk = container_of(item, PgSocket, head);
 		if (sbuf_is_closed(&sk->sbuf)) {
 			change_server_state(sk, SV_FREE);
@@ -2700,21 +2695,21 @@ void objects_cleanup(void)
 			db = container_of(item, PgDatabase, head);
 			kill_database(db);
 		}
+		statlist_for_each_safe(item, &(threads[thread_id].justfree_client_list), tmp) {
+			PgSocket *client = container_of(item, PgSocket, head);
+			client_free(client);
+		}
+		statlist_for_each_safe(item, &(threads[thread_id].justfree_server_list), tmp) {
+			PgSocket *server = container_of(item, PgSocket, head);
+			server_free(server);
+		}
 	}
 	statlist_for_each_safe(item, &peer_list, tmp) {
 		PgDatabase *peer = container_of(item, PgDatabase, head);
 		kill_peer(peer);
 	}
 
-	statlist_for_each_safe(item, &justfree_server_list, tmp) {
-		PgSocket *server = container_of(item, PgSocket, head);
-		server_free(server);
-	}
 
-	statlist_for_each_safe(item, &justfree_client_list, tmp) {
-		PgSocket *client = container_of(item, PgSocket, head);
-		client_free(client);
-	}
 
 	
 	FOR_EACH_THREAD(thread_id){
