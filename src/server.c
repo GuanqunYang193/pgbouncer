@@ -32,6 +32,7 @@ static bool load_parameter(PgSocket *server, PktHdr *pkt, bool startup)
 {
 	const char *key, *val;
 	PgSocket *client = server->link;
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 
 	/*
 	 * Want to see complete packet.  That means SMALL_PKT
@@ -46,15 +47,15 @@ static bool load_parameter(PgSocket *server, PktHdr *pkt, bool startup)
 		goto failed;
 	slog_debug(server, "S: param: %s = %s", key, val);
 
-	varcache_set(&server->vars, key, val);
+	varcache_set(&server->vars, key, val, this_thread->thread_id);
 
 	if (client) {
 		slog_debug(client, "setting client var: %s='%s'", key, val);
-		varcache_set(&client->vars, key, val);
+		varcache_set(&client->vars, key, val, this_thread->thread_id);
 	}
 
 	if (startup) {
-		if (!add_welcome_parameter(server->pool, key, val))
+		if (!add_welcome_parameter(server->pool, key, val, this_thread->thread_id))
 			goto failed_store;
 	}
 

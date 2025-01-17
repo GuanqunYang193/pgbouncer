@@ -21,7 +21,7 @@
  */
 
 #include "bouncer.h"
-
+#include "multithread.h"
 
 /*
  * PostgreSQL type OIDs for result sets
@@ -96,7 +96,7 @@ void pktbuf_static(PktBuf *buf, uint8_t *data, int len)
 	buf->fixed_buf = true;
 }
 
-struct PktBuf *pktbuf_temp(void)
+struct PktBuf *global_pktbuf_temp(void)
 {
 	if (!temp_pktbuf)
 		temp_pktbuf = pktbuf_dynamic(512);
@@ -106,10 +106,26 @@ struct PktBuf *pktbuf_temp(void)
 	return temp_pktbuf;
 }
 
+struct PktBuf *pktbuf_temp(void)
+{
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	if (!(this_thread->temp_pktbuf))
+		this_thread->temp_pktbuf = pktbuf_dynamic(512);
+	if (!(this_thread->temp_pktbuf))
+		die("out of memory");
+	pktbuf_reset(this_thread->temp_pktbuf);
+	return this_thread->temp_pktbuf;
+}
+
 void pktbuf_cleanup(void)
 {
 	pktbuf_free_internal(temp_pktbuf);
 	temp_pktbuf = NULL;
+	int thread_id;
+	bool user_found = true;
+	FOR_EACH_THREAD(thread_id){
+		pktbuf_free_internal(threads[thread_id].temp_pktbuf);
+	}
 }
 
 bool pktbuf_send_immediate(PktBuf *buf, PgSocket *sk)

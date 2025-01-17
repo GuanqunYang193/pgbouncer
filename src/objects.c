@@ -2377,10 +2377,10 @@ bool use_client_socket(int fd, PgAddr *addr,
 	client->tmp_sk_oldfd = oldfd;
 	client->tmp_sk_linkfd = linkfd;
 
-	varcache_set(&client->vars, "client_encoding", client_enc);
-	varcache_set(&client->vars, "standard_conforming_strings", std_string);
-	varcache_set(&client->vars, "datestyle", datestyle);
-	varcache_set(&client->vars, "timezone", timezone);
+	varcache_set(&client->vars, "client_encoding", client_enc, thread_id);
+	varcache_set(&client->vars, "standard_conforming_strings", std_string, thread_id);
+	varcache_set(&client->vars, "datestyle", datestyle, thread_id);
+	varcache_set(&client->vars, "timezone", timezone, thread_id);
 
 	return true;
 }
@@ -2461,10 +2461,10 @@ bool use_server_socket(int fd, PgAddr *addr,
 	server->tmp_sk_oldfd = oldfd;
 	server->tmp_sk_linkfd = linkfd;
 
-	varcache_set(&server->vars, "client_encoding", client_enc);
-	varcache_set(&server->vars, "standard_conforming_strings", std_string);
-	varcache_set(&server->vars, "datestyle", datestyle);
-	varcache_set(&server->vars, "timezone", timezone);
+	varcache_set(&server->vars, "client_encoding", client_enc, thread_id);
+	varcache_set(&server->vars, "standard_conforming_strings", std_string, thread_id);
+	varcache_set(&server->vars, "datestyle", datestyle, thread_id);
+	varcache_set(&server->vars, "timezone", timezone, thread_id);
 
 	return true;
 }
@@ -2648,7 +2648,7 @@ void reuse_just_freed_objects(void)
 	struct List *tmp, *item;
 	PgSocket *sk;
 	bool close_works = true;
-	
+
 	/*
 	 * event_del() may fail because of ENOMEM for event handlers
 	 * that need only changes sent to kernel on each loop.

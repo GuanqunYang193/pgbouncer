@@ -21,6 +21,7 @@
  */
 
 #include "bouncer.h"
+#include "multithread.h"
 
 #include <usual/pgutil.h>
 #include <usual/string.h>
@@ -35,8 +36,6 @@ struct var_lookup {
 };
 
 static struct var_lookup *lookup_map;
-
-static struct StrPool *vpool;
 
 static inline struct PStr *get_value(VarCache *cache, const struct var_lookup *lk)
 {
@@ -106,16 +105,17 @@ void init_var_lookup(const char *cf_track_extra_parameters)
 	num_var_cached = idx;
 }
 
-bool varcache_set(VarCache *cache, const char *key, const char *value)
+bool varcache_set(VarCache *cache, const char *key, const char *value, int thread_id)
 {
 	const struct var_lookup *lk = NULL;
 	struct PStr *pstr = NULL;
-
-	if (!vpool) {
-		vpool = strpool_create(USUAL_ALLOC);
-		if (!vpool)
+	struct StrPool *pool;
+	if (!threads[thread_id].vpool) {
+		threads[thread_id].vpool = strpool_create(USUAL_ALLOC);
+		if (!threads[thread_id].vpool)
 			return false;
 	}
+	pool = threads[thread_id].vpool;
 
 	HASH_FIND_STR(lookup_map, key, lk);
 
@@ -131,7 +131,7 @@ bool varcache_set(VarCache *cache, const char *key, const char *value)
 		return false;
 
 	/* set new value */
-	pstr = strpool_get(vpool, value, strlen(value));
+	pstr = strpool_get(pool, value, strlen(value));
 	if (!pstr)
 		return false;
 	cache->var_list[lk->idx] = pstr;
@@ -241,7 +241,7 @@ void varcache_set_canonical(PgSocket *server, PgSocket *client)
 		server_val = server->vars.var_list[lk->idx];
 		client_val = client->vars.var_list[lk->idx];
 		if (client_val && server_val && client_val != server_val) {
-			slog_debug(client, "varcache_set_canonical: setting %s to its canonical version %s -> %s",
+			log_error(client, "varcache_set_canonical: setting %s to its canonical version %s -> %s",
 				   lk->name, client_val->str, server_val->str);
 			strpool_incref(server_val);
 			strpool_decref(client_val);
@@ -259,7 +259,7 @@ void varcache_apply_startup(PktBuf *pkt, PgSocket *client)
 		if (!val)
 			continue;
 
-		slog_debug(client, "varcache_apply_startup: %s=%s", lk->name, val->str);
+		log_error(client, "varcache_apply_startup: %s=%s", lk->name, val->str);
 		pktbuf_put_string(pkt, lk->name);
 		pktbuf_put_string(pkt, val->str);
 	}
@@ -302,6 +302,9 @@ void varcache_add_params(PktBuf *pkt, VarCache *vars)
 
 void varcache_deinit(void)
 {
-	strpool_free(vpool);
-	vpool = NULL;
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		strpool_free(threads[thread_id].vpool);
+		threads[thread_id].vpool = NULL;
+	}
 }

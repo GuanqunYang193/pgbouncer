@@ -212,7 +212,7 @@ void log_server_error(const char *note, PktHdr *pkt)
  */
 
 /* add another server parameter packet to cache */
-bool add_welcome_parameter(PgPool *pool, const char *key, const char *val)
+bool add_welcome_parameter(PgPool *pool, const char *key, const char *val, int thread_id)
 {
 	PktBuf *msg = pool->welcome_msg;
 
@@ -231,7 +231,7 @@ bool add_welcome_parameter(PgPool *pool, const char *key, const char *val)
 		pktbuf_write_AuthenticationOk(msg);
 
 	/* if not stored in ->orig_vars, write full packet */
-	if (!varcache_set(&pool->orig_vars, key, val))
+	if (!varcache_set(&pool->orig_vars, key, val, thread_id))
 		pktbuf_write_ParameterStatus(msg, key, val);
 
 	return !msg->failed;

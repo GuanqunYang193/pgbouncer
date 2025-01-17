@@ -221,6 +221,7 @@ void init_thread(int thread_id){
 	statlist_init(&(threads[thread_id].user_list), NULL);
 	statlist_init(&(threads[thread_id].justfree_client_list), NULL);
 	statlist_init(&(threads[thread_id].justfree_server_list), NULL);
+	threads[thread_id].vpool = NULL;
 }
 
 void start_threads(){

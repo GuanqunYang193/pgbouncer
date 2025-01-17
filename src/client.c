@@ -824,6 +824,7 @@ static bool set_startup_options(PgSocket *client, const char *options)
 
 	mbuf_init_fixed_writer(&arg, arg_buf, sizeof(arg_buf));
 	slog_debug(client, "received options: %s", options);
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 
 	while (*position) {
 		const char *start_position = position;
@@ -858,7 +859,7 @@ static bool set_startup_options(PgSocket *client, const char *options)
 
 		key_string = (const char *) arg.data;
 		value_string = (const char *) equals + 1;
-		if (varcache_set(&client->vars, key_string, value_string)) {
+		if (varcache_set(&client->vars, key_string, value_string, this_thread->thread_id)) {
 			slog_debug(client, "got var from options: %s=%s", key_string, value_string);
 		} else if (strlist_contains(cf_ignore_startup_params, key_string) || strlist_contains(cf_ignore_startup_params, "options")) {
 			slog_debug(client, "ignoring startup parameter from options: %s=%s", key_string, value_string);
@@ -895,7 +896,8 @@ static void set_appname(PgSocket *client, const char *app_name)
 	}
 	if (app_name) {
 		slog_debug(client, "using application_name: %s", app_name);
-		varcache_set(&client->vars, "application_name", app_name);
+		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		varcache_set(&client->vars, "application_name", app_name, this_thread->thread_id);
 	}
 }
 
@@ -949,6 +951,7 @@ static bool decide_startup_pool(PgSocket *client, PktHdr *pkt)
 	}
 
 	pkt->data.read_pos = original_read_pos;
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 
 	while (1) {
 		ok = mbuf_get_string(&pkt->data, &key);
@@ -977,7 +980,7 @@ static bool decide_startup_pool(PgSocket *client, PktHdr *pkt)
 			unsupported_protocol_extensions_count++;
 			if (!mbuf_write(&unsupported_protocol_extensions, key, strlen(key) + 1))
 				return false;
-		} else if (varcache_set(&client->vars, key, val)) {
+		} else if (varcache_set(&client->vars, key, val, this_thread->thread_id)) {
 			slog_debug(client, "got var: %s=%s", key, val);
 		} else if (strlist_contains(cf_ignore_startup_params, key)) {
 			slog_debug(client, "ignoring startup parameter: %s=%s", key, val);

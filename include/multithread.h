@@ -77,7 +77,10 @@ typedef struct Thread {
     */
     struct StatList justfree_client_list;
     struct StatList justfree_server_list;
-    
+
+    struct StrPool *vpool;
+
+    struct PktBuf *temp_pktbuf;
 } Thread;
 
 typedef struct ClientRequest {

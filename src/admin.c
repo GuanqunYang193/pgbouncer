@@ -285,7 +285,7 @@ static bool send_one_fd(PgSocket *admin,
 	ssize_t res;
 	uint8_t cntbuf[CMSG_SPACE(sizeof(int))];
 
-	struct PktBuf *pkt = pktbuf_temp();
+	struct PktBuf *pkt = global_pktbuf_temp();
 
 	pktbuf_write_DataRow(pkt, "issssiqisssssbb",
 			     fd, task, user, db, addr, port, ckey, link,
