@@ -65,13 +65,15 @@ void cleanup_sockets(void)
 	struct ListenSocket *ls;
 	struct List *el;
 
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+
 	/* avoid cleanup if exit() while suspended */
 	if (cf_pause_mode == P_SUSPEND)
 		return;
 	while ((el = statlist_pop(&sock_list)) != NULL) {
 		ls = container_of(el, struct ListenSocket, node);
 		if (event_del(&ls->ev) < 0) {
-			log_warning("cleanup_sockets, event_del: %s", strerror(errno));
+			log_warning("[Thread %ld] cleanup_sockets: event_del failed: %s", this_thread->thread_id, strerror(errno));
 		}
 		if (ls->fd > 0) {
 			safe_close(ls->fd);

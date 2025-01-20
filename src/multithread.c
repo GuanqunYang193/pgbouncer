@@ -113,7 +113,7 @@ static void handle_sighup(int sock, short flags, void *arg)
 #endif
 
 
-void signal_setup(struct event_base * base, struct SignalEvent* signal_event)
+void signal_setup(struct event_base * base, struct SignalEvent* signal_event, int thread_id)
 {
 	int err;
 
@@ -176,7 +176,7 @@ void* worker_func(void* arg){
 
 	admin_setup();
     thread_pooler_setup();
-	signal_setup(base, &(this_thread->signal_event));
+	signal_setup(base, &(this_thread->signal_event), this_thread->thread_id);
 	janitor_setup();
 	stats_setup();
 

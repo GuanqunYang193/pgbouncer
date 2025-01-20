@@ -65,7 +65,7 @@ typedef struct ClientRequest {
 Thread threads[THREAD_NUM];
 extern int next_thread;
 
-void signal_setup(struct event_base * base, struct SignalEvent* signal_event);
+void signal_setup(struct event_base * base, struct SignalEvent* signal_event, int thread_id);
 void start_threads();
 void init_threads();
 void clean_threads();

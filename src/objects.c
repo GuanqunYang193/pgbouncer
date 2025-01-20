@@ -72,8 +72,18 @@ const char *replication_type_parameters[] = {
 	[REPLICATION_PHYSICAL] = "yes",
 };
 
+int get_active_client_count(int thread_id)
+{
+	return slab_active_count(threads[thread_id].client_cache);
+}
+
+int get_active_server_count(int thread_id)
+{
+	return slab_active_count(threads[thread_id].server_cache);
+}
+
 /* fast way to get number of active clients */
-int get_active_client_count(void)
+int get_total_active_client_count(void)
 {
 	int total_count_from_all_threads = 0;
 	for (int i = 0; i < THREAD_NUM; i++) {
@@ -83,7 +93,7 @@ int get_active_client_count(void)
 }
 
 /* fast way to get number of active servers */
-int get_active_server_count(void)
+int get_total_active_server_count(void)
 {
 	int total_count_from_all_threads = 0;
 	for (int i = 0; i < THREAD_NUM; i++) {
