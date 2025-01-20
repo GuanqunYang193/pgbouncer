@@ -800,7 +800,7 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 
 	cleanup_client_logins();
 
-	if (cf_shutdown == SHUTDOWN_WAIT_FOR_SERVERS && get_active_server_count() == 0) {
+	if (cf_shutdown == SHUTDOWN_WAIT_FOR_SERVERS && get_active_server_count(this_thread->thread_id) == 0) {
 		log_info("server connections dropped, exiting");
 		cf_shutdown = SHUTDOWN_IMMEDIATE;
 		struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
@@ -808,7 +808,7 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 		return;
 	}
 
-	if (cf_shutdown == SHUTDOWN_WAIT_FOR_CLIENTS && get_active_client_count() == 0) {
+	if (cf_shutdown == SHUTDOWN_WAIT_FOR_CLIENTS && get_active_client_count(this_thread->thread_id) == 0) {
 		log_info("client connections dropped, exiting");
 		cf_shutdown = SHUTDOWN_IMMEDIATE;
 		struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);

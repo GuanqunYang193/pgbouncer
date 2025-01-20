@@ -972,7 +972,7 @@ int main(int argc, char *argv[])
 		 tls_backend_version());
 
 	sd_notify(0, "READY=1");
-	signal_setup(pgb_event_base, &main_signal_event);
+	signal_setup(pgb_event_base, &main_signal_event, -1);
 	start_threads();
 	pooler_setup();
 	void* retval = NULL;
