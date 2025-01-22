@@ -74,6 +74,7 @@ UTHASH = uthash
 pgbouncer_CPPFLAGS = -Iinclude $(CARES_CFLAGS) $(LIBEVENT_CFLAGS) $(TLS_CPPFLAGS)
 pgbouncer_CPPFLAGS += -I$(UTHASH)/src
 pgbouncer_CPPFLAGS += -Wno-error=implicit-function-declaration
+pgbouncer_CPPFLAGS += -I/opt/homebrew/include
 
 # include libusual sources directly
 AM_FEATURES = libusual
@@ -117,7 +118,9 @@ UTHASH_DIST = $(UTHASH)/src/uthash.h \
               $(UTHASH)/LICENSE
 
 pgbouncer_LDFLAGS := $(TLS_LDFLAGS)
+pgbouncer_LDFLAGS += -L/opt/homebrew/lib
 pgbouncer_LDADD := $(CARES_LIBS) $(LIBEVENT_LIBS) $(TLS_LIBS) $(LIBS)
+pgbouncer_LDADD += -levent
 LIBS :=
 
 #

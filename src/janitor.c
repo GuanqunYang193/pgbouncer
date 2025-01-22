@@ -27,7 +27,7 @@
 
 /* do full maintenance 3x per second */
 static struct timeval full_maint_period = {0, USEC / 3};
-
+static struct event full_maint_ev;
 extern bool any_user_level_server_timeout_set;
 extern bool any_user_level_client_timeout_set;
 
@@ -694,14 +694,15 @@ static void cleanup_client_logins(void)
 	if (cf_client_login_timeout <= 0)
 		return;
 	
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-	statlist_for_each_safe(item, &(this_thread->login_client_list), tmp) {
-		client = container_of(item, PgSocket, head);
-		age = now - client->connect_time;
-		if (age > cf_client_login_timeout)
-			disconnect_client(client, true, "client_login_timeout");
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each_safe(item, &(threads[thread_id].login_client_list), tmp) {
+			client = container_of(item, PgSocket, head);
+			age = now - client->connect_time;
+			if (age > cf_client_login_timeout)
+				disconnect_client(client, true, "client_login_timeout");
+		}
 	}
-
 }
 
 static void cleanup_inactive_autodatabases(void)
@@ -713,19 +714,58 @@ static void cleanup_inactive_autodatabases(void)
 
 	if (cf_autodb_idle_timeout <= 0)
 		return;
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+
 	/* now kill the old ones */
-	statlist_for_each_safe(item, &(this_thread->autodatabase_idle_list), tmp) {
-		db = container_of(item, PgDatabase, head);
-		if (db->db_paused)
-			continue;
-		age = now - db->inactive_time;
-		if (age > cf_autodb_idle_timeout) {
-			kill_database(db);
-		} else {
-			break;
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each_safe(item, &(threads[thread_id].autodatabase_idle_list), tmp) {
+			db = container_of(item, PgDatabase, head);
+			if (db->db_paused)
+				continue;
+			age = now - db->inactive_time;
+			if (age > cf_autodb_idle_timeout) {
+				kill_database(db);
+			} else {
+				break;
+			}
 		}
 	}
+}
+
+void log_event_details(struct event *ev) {
+    int fd = event_get_fd(ev);  // Get the file descriptor
+    short events = event_get_events(ev);  // Get the events
+    const char *event_types = "";
+
+    // Map event types to a human-readable string
+    if (events & EV_READ)
+        event_types = "EV_READ";
+    if (events & EV_WRITE)
+        event_types = "EV_WRITE";
+    if (events & EV_TIMEOUT)
+        event_types = "EV_TIMEOUT";
+    if (events & EV_SIGNAL)
+        event_types = "EV_SIGNAL";
+    if (events & EV_PERSIST)
+        event_types = "EV_PERSIST";
+
+    printf("Event: fd=%d, types=%s, persist=%s\n",
+           fd, event_types, (events & EV_PERSIST) ? "yes" : "no");
+}
+
+struct event *get_next_event(int *current_index) {
+    if (*current_index < event_count) {
+        return event_list[(*current_index)++];
+    }
+    return NULL;  // No more events
+}
+
+void log_all_events(struct event_base *base) {
+    int index = 0;
+    struct event *ev;
+    while ((ev = get_next_event(&index)) != NULL) {
+        log_event_details(ev);
+    }
 }
 
 /* full-scale maintenance, done only occasionally */
@@ -756,63 +796,83 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	 * the risk of creating connections in unexpected ways, where there are
 	 * many users.
 	   _	 */
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-	statlist_for_each_safe(item, &(this_thread->database_list), tmp) {
-		db = container_of(item, PgDatabase, head);
-		if (database_min_pool_size(db) > 0 && db->forced_user_credentials != NULL) {
-			get_pool(db, db->forced_user_credentials);
+	int thread_id;
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each_safe(item, &(threads[thread_id].database_list), tmp) {
+			db = container_of(item, PgDatabase, head);
+			if (database_min_pool_size(db) > 0 && db->forced_user_credentials != NULL) {
+				get_pool(db, db->forced_user_credentials);
+			}
 		}
 	}
 
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each_safe(item, &(threads[thread_id].pool_list), tmp) {
+			pool = container_of(item, PgPool, head);
+			if (pool->db->admin)
+				continue;
+			pool_server_maint(pool);
+			pool_client_maint(pool);
 
-	statlist_for_each_safe(item, &(this_thread->pool_list), tmp) {
-		pool = container_of(item, PgPool, head);
-		if (pool->db->admin)
-			continue;
-		pool_server_maint(pool);
-		pool_client_maint(pool);
-
-		/* is autodb active? */
-		if (pool->db->db_auto && pool->db->inactive_time == 0) {
-			if (pool_client_count(pool) > 0 || pool_server_count(pool) > 0)
-				pool->db->active_stamp = seq;
+			/* is autodb active? */
+			if (pool->db->db_auto && pool->db->inactive_time == 0) {
+				if (pool_client_count(pool) > 0 || pool_server_count(pool) > 0)
+					pool->db->active_stamp = seq;
+			}
 		}
 	}
 
-	statlist_for_each_safe(item, &(this_thread->peer_pool_list), tmp) {
-		pool = container_of(item, PgPool, head);
-		peer_pool_server_maint(pool);
-		peer_pool_client_maint(pool);
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each_safe(item, &(threads[thread_id].peer_pool_list), tmp) {
+			pool = container_of(item, PgPool, head);
+			peer_pool_server_maint(pool);
+			peer_pool_client_maint(pool);
+		}
 	}
 
 	/* find inactive autodbs */
-	statlist_for_each_safe(item, &(this_thread->database_list), tmp) {
-		db = container_of(item, PgDatabase, head);
-		if (db->db_auto && db->inactive_time == 0) {
-			if (db->active_stamp == seq)
-				continue;
-			db->inactive_time = get_cached_time();
-			statlist_remove(&(this_thread->database_list), &db->head);
-			statlist_append(&(this_thread->autodatabase_idle_list), &db->head);
+	FOR_EACH_THREAD(thread_id){
+		statlist_for_each_safe(item, &(threads[thread_id].database_list), tmp) {
+			db = container_of(item, PgDatabase, head);
+			if (db->db_auto && db->inactive_time == 0) {
+				if (db->active_stamp == seq)
+					continue;
+				db->inactive_time = get_cached_time();
+				statlist_remove(&(threads[thread_id].database_list), &db->head);
+				statlist_append(&(threads[thread_id].autodatabase_idle_list), &db->head);
+			}
 		}
 	}
+
 	cleanup_inactive_autodatabases();
 
 	cleanup_client_logins();
 
-	if (cf_shutdown == SHUTDOWN_WAIT_FOR_SERVERS && get_active_server_count(this_thread->thread_id) == 0) {
+	if (cf_shutdown == SHUTDOWN_WAIT_FOR_SERVERS && get_total_active_server_count() == 0) {
 		log_info("server connections dropped, exiting");
 		cf_shutdown = SHUTDOWN_IMMEDIATE;
-		struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
-		event_base_loopbreak(base);
+
+		FOR_EACH_THREAD(thread_id){
+			log_info("sub thread event_base_loopbreak");
+			event_base_dump_events(threads[thread_id].event_base, stdout);
+			log_all_events(threads[thread_id].event_base);
+			event_base_loopbreak(threads[thread_id].event_base);
+		}
+		event_base_dump_events(threads[thread_id].event_base, stdout);
+		log_all_events(threads[thread_id].event_base);
+		event_base_loopbreak(pgb_event_base);
+		log_info("here");
 		return;
 	}
+	log_info("outside");
 
-	if (cf_shutdown == SHUTDOWN_WAIT_FOR_CLIENTS && get_active_client_count(this_thread->thread_id) == 0) {
+	if (cf_shutdown == SHUTDOWN_WAIT_FOR_CLIENTS && get_total_active_client_count() == 0) {
 		log_info("client connections dropped, exiting");
 		cf_shutdown = SHUTDOWN_IMMEDIATE;
-		struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
-		event_base_loopbreak(base);
+		event_base_loopbreak(pgb_event_base);
+		FOR_EACH_THREAD(thread_id){
+			event_base_loopbreak(threads[thread_id].event_base);
+		}
 		return;
 	}
 
@@ -823,11 +883,8 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 void janitor_setup(void)
 {
 	/* launch maintenance */
-	struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-
-	event_assign(&(this_thread->full_maint_ev), base, -1, EV_PERSIST, do_full_maint, NULL);
-	if (event_add(&(this_thread->full_maint_ev), &full_maint_period) < 0)
+	event_assign(&full_maint_ev, pgb_event_base, -1, EV_PERSIST, do_full_maint, NULL);
+	if (event_add(&full_maint_ev, &full_maint_period) < 0)
 		log_warning("event_add failed: %s", strerror(errno));
 }
 

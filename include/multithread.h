@@ -34,17 +34,18 @@ typedef struct SignalEvent{
 
 typedef struct Thread {
 
-    struct StatList sock_list;
+    // struct StatList sock_list;
     pthread_t worker;
     int thread_id;
-    struct event full_maint_ev;
+    // struct event full_maint_ev;
     struct event ev_stats;
     struct event ev_handle_request;
+    struct event_base *event_base;
     int pipefd[2];
     struct StatList login_client_list;
     struct StatList pool_list;
     struct StatList peer_pool_list;
-    struct SignalEvent signal_event;
+    // struct SignalEvent signal_event;
     struct StatList database_list;
     struct StatList autodatabase_idle_list;
     struct StatList user_list;
@@ -91,7 +92,7 @@ typedef struct ClientRequest {
 Thread threads[THREAD_NUM];
 extern int next_thread;
 
-void signal_setup(struct event_base * base, struct SignalEvent* signal_event, int thread_id);
+void signal_setup(struct event_base * base, struct SignalEvent* signal_event);
 void start_threads();
 void init_threads();
 void clean_threads();

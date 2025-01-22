@@ -113,7 +113,7 @@ static void handle_sighup(int sock, short flags, void *arg)
 #endif
 
 
-void signal_setup(struct event_base * base, struct SignalEvent* signal_event, int thread_id)
+void signal_setup(struct event_base * base, struct SignalEvent* signal_event)
 {
 	int err;
 
@@ -171,13 +171,12 @@ void* worker_func(void* arg){
         fprintf(stderr, "[Thread %ld] Failed to create event_base.\n", this_thread->thread_id);
         die("event_base_new() failed");
     }
+	this_thread->event_base = base;
 
     pthread_setspecific(event_base_key, base);
 
 	admin_setup();
     thread_pooler_setup();
-	signal_setup(base, &(this_thread->signal_event), this_thread->thread_id);
-	janitor_setup();
 	stats_setup();
 
     while(true){
@@ -212,7 +211,7 @@ void init_thread(int thread_id){
 	if (fcntl(threads[thread_id].pipefd[1], F_SETFL, flags | O_NONBLOCK) < 0) {
 		die("set pipe flag failed");
 	}
-	statlist_init(&(threads[thread_id].sock_list), NULL);
+	// statlist_init(&(threads[thread_id].sock_list), NULL);
 	statlist_init(&(threads[thread_id].pool_list), NULL);
 	statlist_init(&(threads[thread_id].peer_pool_list), NULL);
 	statlist_init(&(threads[thread_id].login_client_list), NULL);
