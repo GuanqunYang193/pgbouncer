@@ -732,42 +732,6 @@ static void cleanup_inactive_autodatabases(void)
 	}
 }
 
-void log_event_details(struct event *ev) {
-    int fd = event_get_fd(ev);  // Get the file descriptor
-    short events = event_get_events(ev);  // Get the events
-    const char *event_types = "";
-
-    // Map event types to a human-readable string
-    if (events & EV_READ)
-        event_types = "EV_READ";
-    if (events & EV_WRITE)
-        event_types = "EV_WRITE";
-    if (events & EV_TIMEOUT)
-        event_types = "EV_TIMEOUT";
-    if (events & EV_SIGNAL)
-        event_types = "EV_SIGNAL";
-    if (events & EV_PERSIST)
-        event_types = "EV_PERSIST";
-
-    printf("Event: fd=%d, types=%s, persist=%s\n",
-           fd, event_types, (events & EV_PERSIST) ? "yes" : "no");
-}
-
-struct event *get_next_event(int *current_index) {
-    if (*current_index < event_count) {
-        return event_list[(*current_index)++];
-    }
-    return NULL;  // No more events
-}
-
-void log_all_events(struct event_base *base) {
-    int index = 0;
-    struct event *ev;
-    while ((ev = get_next_event(&index)) != NULL) {
-        log_event_details(ev);
-    }
-}
-
 /* full-scale maintenance, done only occasionally */
 static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 {
@@ -855,11 +819,9 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 		FOR_EACH_THREAD(thread_id){
 			log_info("sub thread event_base_loopbreak");
 			event_base_dump_events(threads[thread_id].event_base, stdout);
-			log_all_events(threads[thread_id].event_base);
 			event_base_loopbreak(threads[thread_id].event_base);
 		}
-		event_base_dump_events(threads[thread_id].event_base, stdout);
-		log_all_events(threads[thread_id].event_base);
+		event_base_dump_events(pgb_event_base, stdout);
 		event_base_loopbreak(pgb_event_base);
 		log_info("here");
 		return;
