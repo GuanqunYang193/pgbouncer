@@ -22,7 +22,7 @@ void handle_sigterm(evutil_socket_t sock, short flags, void *arg)
 }
 
 
-static void handle_sigint(evutil_socket_t sock, short flags, void *arg)
+static void handle_sigint_main(evutil_socket_t sock, short flags, void *arg)
 {
 	if (cf_shutdown) {
 		log_info("got SIGINT while shutting down, fast exit");
@@ -36,12 +36,22 @@ static void handle_sigint(evutil_socket_t sock, short flags, void *arg)
 	if (cf_pause_mode == P_SUSPEND)
 		die("suspend was in progress, going down immediately");
 	cf_pause_mode = P_PAUSE;
-	cf_shutdown = SHUTDOWN_WAIT_FOR_SERVERS;
+	cf_shutdown = SHUTDOWN_IMMEDIATE;
 	cleanup_sockets();
 }
 
 
-
+static void handle_sigint(evutil_socket_t sock, short flags, void *arg)
+{
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	if (this_thread->cf_shutdown) {
+		log_info("got SIGINT while shutting down, fast exit");
+		/* pidfile cleanup happens via atexit() */
+		exit(0);
+	}
+	log_info("[Thread %d]got SIGINT, shutting down, waiting for all servers connections to be released", this_thread->thread_id);
+	this_thread->cf_shutdown = SHUTDOWN_WAIT_FOR_SERVERS;
+}
 
 #ifndef WIN32
 
@@ -154,7 +164,11 @@ void signal_setup(struct event_base * base, struct SignalEvent* signal_event, in
 	if (err < 0)
 		fatal_perror("evsignal_add");
 
-	evsignal_assign(&(signal_event->ev_sigint), base, SIGINT, handle_sigint, NULL);
+	if(thread_id == -1)
+		evsignal_assign(&(signal_event->ev_sigint), base, SIGINT, handle_sigint_main, NULL);
+	else
+		evsignal_assign(&(signal_event->ev_sigint), base, SIGINT, handle_sigint, NULL);
+	
 	err = evsignal_add(&(signal_event->ev_sigint), NULL);
 	if (err < 0)
 		fatal_perror("evsignal_add");
@@ -180,7 +194,7 @@ void* worker_func(void* arg){
 	janitor_setup();
 	stats_setup();
 
-    while(true){
+    while(this_thread->cf_shutdown != SHUTDOWN_IMMEDIATE){
         int err;
         reset_time_cache();
         err = event_base_loop(base, EVLOOP_ONCE);
@@ -198,7 +212,6 @@ void* worker_func(void* arg){
 
 static void event_base_destructor(void* base_ptr) {
     if (base_ptr) {
-        printf("[Destructor] Free event_base: %p\n", base_ptr);
         event_base_free((struct event_base*)base_ptr);
     }
 }
@@ -222,6 +235,7 @@ void init_thread(int thread_id){
 	statlist_init(&(threads[thread_id].justfree_client_list), NULL);
 	statlist_init(&(threads[thread_id].justfree_server_list), NULL);
 	threads[thread_id].vpool = NULL;
+	threads[thread_id].cf_shutdown = SHUTDOWN_NONE;
 }
 
 void start_threads(){

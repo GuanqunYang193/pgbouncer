@@ -81,6 +81,8 @@ typedef struct Thread {
     struct StrPool *vpool;
 
     struct PktBuf *temp_pktbuf;
+
+    int cf_shutdown;
 } Thread;
 
 typedef struct ClientRequest {

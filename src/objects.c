@@ -827,8 +827,9 @@ static void pause_client(PgSocket *client)
 {
 	Assert(client->state == CL_ACTIVE || client->state == CL_LOGIN);
 	slog_debug(client, "pause_client");
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 
-	if (cf_shutdown == SHUTDOWN_WAIT_FOR_SERVERS) {
+	if (this_thread->cf_shutdown == SHUTDOWN_WAIT_FOR_SERVERS) {
 		disconnect_client(client, true, "server shutting down");
 		return;
 	}

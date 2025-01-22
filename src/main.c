@@ -983,7 +983,6 @@ int main(int argc, char *argv[])
 
 
 	for(int i=0;i<THREAD_NUM;i++){
-		printf("waiting for %ld",threads[i].worker);
 		int ret = pthread_join(threads[i].worker, &retval);
 		 if (ret != 0) {
 			fprintf(stderr, "pthread_join failed, err=%d\n", ret);
