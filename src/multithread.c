@@ -169,7 +169,7 @@ void* worker_func(void* arg){
     struct event_base *base = event_base_new();
     if (!base) {
         fprintf(stderr, "[Thread %ld] Failed to create event_base.\n", this_thread->thread_id);
-        die("event_base_new() failed");
+		die("event_base_new() failed");
     }
 	this_thread->event_base = base;
 
@@ -179,7 +179,7 @@ void* worker_func(void* arg){
     thread_pooler_setup();
 	stats_setup();
 
-    while(true){
+    while(cf_shutdown!=SHUTDOWN_IMMEDIATE){
         int err;
         reset_time_cache();
         err = event_base_loop(base, EVLOOP_ONCE);
