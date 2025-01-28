@@ -4,7 +4,7 @@
 
 int next_thread = 0;
 
-void handle_sigterm(evutil_socket_t sock, short flags, void *arg)
+void handle_sigterm_main(evutil_socket_t sock, short flags, void *arg)
 {
 	if (cf_shutdown) {
 		log_info("got SIGTERM while shutting down, fast exit");
@@ -17,10 +17,21 @@ void handle_sigterm(evutil_socket_t sock, short flags, void *arg)
 		die("takeover was in progress, going down immediately");
 	if (cf_pause_mode == P_SUSPEND)
 		die("suspend was in progress, going down immediately");
-	cf_shutdown = SHUTDOWN_WAIT_FOR_CLIENTS;
+	cf_shutdown = SHUTDOWN_IMMEDIATE;
 	cleanup_sockets();
 }
 
+void handle_sigterm(evutil_socket_t sock, short flags, void *arg)
+{
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	if (this_thread->cf_shutdown) {
+		log_info("got SIGTERM while shutting down, fast exit");
+		/* pidfile cleanup happens via atexit() */
+		exit(0);
+	}
+	log_info("[Thread %d] got SIGTERM, shutting down, waiting for all clients disconnect", this_thread->thread_id);
+	this_thread->cf_shutdown = SHUTDOWN_WAIT_FOR_SERVERS;
+}
 
 static void handle_sigint_main(evutil_socket_t sock, short flags, void *arg)
 {
@@ -49,7 +60,7 @@ static void handle_sigint(evutil_socket_t sock, short flags, void *arg)
 		/* pidfile cleanup happens via atexit() */
 		exit(0);
 	}
-	log_info("[Thread %d]got SIGINT, shutting down, waiting for all servers connections to be released", this_thread->thread_id);
+	log_info("[Thread %d] got SIGINT, shutting down, waiting for all servers connections to be released", this_thread->thread_id);
 	this_thread->cf_shutdown = SHUTDOWN_WAIT_FOR_SERVERS;
 }
 
@@ -139,27 +150,37 @@ void signal_setup(struct event_base * base, struct SignalEvent* signal_event, in
 
 	/* install handlers */
 
-	evsignal_assign(&(signal_event->ev_sigusr1), base, SIGUSR1, handle_sigusr1, NULL);
-	err = evsignal_add(&(signal_event->ev_sigusr1), NULL);
-	if (err < 0)
-		fatal_perror("evsignal_add");
+	if(thread_id == -1) {
+		evsignal_assign(&(signal_event->ev_sigusr1), base, SIGUSR1, handle_sigusr1, NULL);
+		err = evsignal_add(&(signal_event->ev_sigusr1), NULL);
+		if (err < 0)
+			fatal_perror("evsignal_add");
+	}
 
-	evsignal_assign(&(signal_event->ev_sigusr2), base, SIGUSR2, handle_sigusr2, NULL);
-	err = evsignal_add(&(signal_event->ev_sigusr2), NULL);
-	if (err < 0)
-		fatal_perror("evsignal_add");
+	if(thread_id == -1) {
+		evsignal_assign(&(signal_event->ev_sigusr2), base, SIGUSR2, handle_sigusr2, NULL);
+		err = evsignal_add(&(signal_event->ev_sigusr2), NULL);
+		if (err < 0)
+			fatal_perror("evsignal_add");
+	}
 
-	evsignal_assign(&(signal_event->ev_sighup), base, SIGHUP, handle_sighup, NULL);
-	err = evsignal_add(&(signal_event->ev_sighup), NULL);
-	if (err < 0)
-		fatal_perror("evsignal_add");
+	if(thread_id == -1) {
+		evsignal_assign(&(signal_event->ev_sighup), base, SIGHUP, handle_sighup, NULL);
+		err = evsignal_add(&(signal_event->ev_sighup), NULL);
+		if (err < 0)
+			fatal_perror("evsignal_add");
+	}
 
 	evsignal_assign(&(signal_event->ev_sigquit), base, SIGQUIT, handle_sigquit, NULL);
 	err = evsignal_add(&(signal_event->ev_sigquit), NULL);
 	if (err < 0)
 		fatal_perror("evsignal_add");
 #endif
-	evsignal_assign(&(signal_event->ev_sigterm), base, SIGTERM, handle_sigterm, NULL);
+	if(thread_id == -1)
+		evsignal_assign(&(signal_event->ev_sigterm), base, SIGTERM, handle_sigterm_main, NULL);
+	else
+		evsignal_assign(&(signal_event->ev_sigterm), base, SIGTERM, handle_sigterm, NULL);
+
 	err = evsignal_add(&(signal_event->ev_sigterm), NULL);
 	if (err < 0)
 		fatal_perror("evsignal_add");
@@ -225,7 +246,6 @@ void init_thread(int thread_id){
 	if (fcntl(threads[thread_id].pipefd[1], F_SETFL, flags | O_NONBLOCK) < 0) {
 		die("set pipe flag failed");
 	}
-	statlist_init(&(threads[thread_id].sock_list), NULL);
 	statlist_init(&(threads[thread_id].pool_list), NULL);
 	statlist_init(&(threads[thread_id].peer_pool_list), NULL);
 	statlist_init(&(threads[thread_id].login_client_list), NULL);

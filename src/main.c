@@ -80,6 +80,7 @@ struct SignalEvent main_signal_event;
  */
 
 int cf_daemon;
+// TODO(beihao): atomic write if multiple admins change it
 int cf_pause_mode = P_NONE;
 int cf_shutdown = SHUTDOWN_NONE;
 int cf_reboot;
