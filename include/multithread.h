@@ -34,7 +34,6 @@ typedef struct SignalEvent{
 
 typedef struct Thread {
 
-    struct StatList sock_list;
     pthread_t worker;
     int thread_id;
     struct event full_maint_ev;
