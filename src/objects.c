@@ -147,10 +147,14 @@ void init_objects(void)
         char pool_cache_name[MAX_SLAB_NAME];
 		char peer_pool_cache_name[MAX_SLAB_NAME];
 		char db_cache_name[MAX_SLAB_NAME];
+		char outstanding_request_cache_name[MAX_SLAB_NAME];
+		char user_cache_name[MAX_SLAB_NAME];
 		
-		snprintf(pool_cache_name, MAX_SLAB_NAME, "pool_cache_thread_%d", thread_id);
-		snprintf(peer_pool_cache_name, MAX_SLAB_NAME, "peer_pool_cache_thread_%d", thread_id);
-		snprintf(db_cache_name, MAX_SLAB_NAME, "db_cache_thread_%d", thread_id);
+		snprintf(pool_cache_name, MAX_SLAB_NAME, "pool_cache_t%d", thread_id);
+		snprintf(peer_pool_cache_name, MAX_SLAB_NAME, "peer_pool_cache_t%d", thread_id);
+		snprintf(db_cache_name, MAX_SLAB_NAME, "db_cache_t%d", thread_id);
+		snprintf(outstanding_request_cache_name, MAX_SLAB_NAME, "outstanding_request_cache_t%d", thread_id);
+		snprintf(user_cache_name, MAX_SLAB_NAME, "user_cache_t%d", thread_id);
 
 		aatree_init(&(threads[thread_id].user_tree), global_user_node_cmp, NULL);
 		aatree_init(&(threads[thread_id].pam_user_tree), credentials_node_cmp, NULL);
@@ -158,9 +162,8 @@ void init_objects(void)
 		threads[thread_id].pool_cache = slab_create(pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
 		threads[thread_id].peer_pool_cache = slab_create(peer_pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
 		threads[thread_id].db_cache = slab_create(db_cache_name, sizeof(PgDatabase), 0, NULL, USUAL_ALLOC);
-
-		threads[thread_id].outstanding_request_cache = slab_create("outstanding_request_cache", sizeof(OutstandingRequest), 0, NULL, USUAL_ALLOC);
-		threads[thread_id].user_cache = slab_create("user_cache", sizeof(PgGlobalUser), 0, NULL, USUAL_ALLOC);
+		threads[thread_id].outstanding_request_cache = slab_create(outstanding_request_cache_name, sizeof(OutstandingRequest), 0, NULL, USUAL_ALLOC);
+		threads[thread_id].user_cache = slab_create(user_cache_name, sizeof(PgGlobalUser), 0, NULL, USUAL_ALLOC);
 
 		if (!threads[thread_id].pool_cache)
 			fatal("cannot create initial pool_cache");
@@ -202,11 +205,11 @@ void init_caches(void)
         char var_list_cache_name[MAX_SLAB_NAME];
         char server_prepared_statement_cache_name[MAX_SLAB_NAME];
 
-        snprintf(server_cache_name, MAX_SLAB_NAME, "server_cache_thread_%d", i);
-        snprintf(client_cache_name, MAX_SLAB_NAME, "client_cache_thread_%d", i);
-        snprintf(iobuf_cache_name, MAX_SLAB_NAME, "iobuf_cache_thread_%d", i);
-        snprintf(var_list_cache_name, MAX_SLAB_NAME, "var_list_cache_thread_%d", i);
-        snprintf(server_prepared_statement_cache_name, MAX_SLAB_NAME, "server_prepared_statement_cache_thread_%d", i);
+        snprintf(server_cache_name, MAX_SLAB_NAME, "server_cache_t%d", i);
+        snprintf(client_cache_name, MAX_SLAB_NAME, "client_cache_t%d", i);
+        snprintf(iobuf_cache_name, MAX_SLAB_NAME, "iobuf_cache_t%d", i);
+        snprintf(var_list_cache_name, MAX_SLAB_NAME, "var_list_cache_t%d", i);
+        snprintf(server_prepared_statement_cache_name, MAX_SLAB_NAME, "server_prep_stmt_cache_t%d", i);
 
 		threads[i].server_cache = slab_create(server_cache_name, sizeof(PgSocket), 0, construct_server, USUAL_ALLOC);
 		threads[i].client_cache = slab_create(client_cache_name, sizeof(PgSocket), 0, construct_client, USUAL_ALLOC);
