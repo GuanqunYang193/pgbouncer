@@ -858,6 +858,9 @@ extern char *cf_server_tls_ciphers;
 
 extern int cf_max_prepared_statements;
 
+extern int arg_thread_number;
+extern bool multithread_mode;
+
 extern const struct CfLookup pool_mode_map[];
 extern const struct CfLookup load_balance_hosts_map[];
 

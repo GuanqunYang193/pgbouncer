@@ -69,8 +69,8 @@ int get_active_server_count(int thread_id)
 int get_total_active_client_count(void)
 {
 	int total_count_from_all_threads = 0;
-	for (int i = 0; i < THREAD_NUM; i++) {
-		total_count_from_all_threads += slab_active_count(threads[i].client_cache);
+	FOR_EACH_THREAD(thread_id){	
+		total_count_from_all_threads += slab_active_count(threads[thread_id].client_cache);
 	}
 	return total_count_from_all_threads;
 }
@@ -79,8 +79,8 @@ int get_total_active_client_count(void)
 int get_total_active_server_count(void)
 {
 	int total_count_from_all_threads = 0;
-	for (int i = 0; i < THREAD_NUM; i++) {
-		total_count_from_all_threads += slab_active_count(threads[i].server_cache);
+	FOR_EACH_THREAD(thread_id){	
+		total_count_from_all_threads += slab_active_count(threads[thread_id].server_cache);
 	}
 	return total_count_from_all_threads;
 }
@@ -142,7 +142,6 @@ static void credentials_node_release(struct AANode *node, void *arg)
 /* initialization before config loading */
 void init_objects(void)
 {
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){		
         char pool_cache_name[MAX_SLAB_NAME];
 		char peer_pool_cache_name[MAX_SLAB_NAME];
@@ -197,25 +196,25 @@ static void do_iobuf_reset(void *arg)
 /* initialization after config loading */
 void init_caches(void)
 {
-
-	for (int i = 0; i < THREAD_NUM; i++) {
+	FOR_EACH_THREAD(thread_id){
         char server_cache_name[MAX_SLAB_NAME];
         char client_cache_name[MAX_SLAB_NAME];
         char iobuf_cache_name[MAX_SLAB_NAME];
         char var_list_cache_name[MAX_SLAB_NAME];
         char server_prepared_statement_cache_name[MAX_SLAB_NAME];
 
-        snprintf(server_cache_name, MAX_SLAB_NAME, "server_cache_t%d", i);
-        snprintf(client_cache_name, MAX_SLAB_NAME, "client_cache_t%d", i);
-        snprintf(iobuf_cache_name, MAX_SLAB_NAME, "iobuf_cache_t%d", i);
-        snprintf(var_list_cache_name, MAX_SLAB_NAME, "var_list_cache_t%d", i);
-        snprintf(server_prepared_statement_cache_name, MAX_SLAB_NAME, "server_prep_stmt_cache_t%d", i);
 
-		threads[i].server_cache = slab_create(server_cache_name, sizeof(PgSocket), 0, construct_server, USUAL_ALLOC);
-		threads[i].client_cache = slab_create(client_cache_name, sizeof(PgSocket), 0, construct_client, USUAL_ALLOC);
-		threads[i].iobuf_cache = slab_create(iobuf_cache_name, IOBUF_SIZE, 0, do_iobuf_reset, USUAL_ALLOC);
-		threads[i].var_list_cache = slab_create(var_list_cache_name, sizeof(struct PStr *) * get_num_var_cached(), 0, NULL, USUAL_ALLOC);
-		threads[i].server_prepared_statement_cache = slab_create(server_prepared_statement_cache_name, sizeof(PgServerPreparedStatement), 0, NULL, USUAL_ALLOC);
+        snprintf(server_cache_name, MAX_SLAB_NAME, "server_cache_thread_%d", thread_id);
+        snprintf(client_cache_name, MAX_SLAB_NAME, "client_cache_thread_%d", thread_id);
+        snprintf(iobuf_cache_name, MAX_SLAB_NAME, "iobuf_cache_thread_%d", thread_id);
+        snprintf(var_list_cache_name, MAX_SLAB_NAME, "var_list_cache_thread_%d", thread_id);
+        snprintf(server_prepared_statement_cache_name, MAX_SLAB_NAME, "server_prepared_statement_cache_thread_%d", thread_id);
+
+		threads[thread_id].server_cache = slab_create(server_cache_name, sizeof(PgSocket), 0, construct_server, USUAL_ALLOC);
+		threads[thread_id].client_cache = slab_create(client_cache_name, sizeof(PgSocket), 0, construct_client, USUAL_ALLOC);
+		threads[thread_id].iobuf_cache = slab_create(iobuf_cache_name, IOBUF_SIZE, 0, do_iobuf_reset, USUAL_ALLOC);
+		threads[thread_id].var_list_cache = slab_create(var_list_cache_name, sizeof(struct PStr *) * get_num_var_cached(), 0, NULL, USUAL_ALLOC);
+		threads[thread_id].server_prepared_statement_cache = slab_create(server_prepared_statement_cache_name, sizeof(PgServerPreparedStatement), 0, NULL, USUAL_ALLOC);
 	}
 }
 
@@ -1809,7 +1808,6 @@ bool evict_connection(PgDatabase *db)
 	struct List *item;
 	PgPool *pool;
 	PgSocket *oldest_connection = NULL;
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -1853,7 +1851,6 @@ bool evict_user_connection(PgCredentials *user_credentials)
 	PgPool *pool;
 	PgSocket *oldest_connection = NULL;
 
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -2199,7 +2196,6 @@ void accept_cancel_request(PgSocket *req)
 
 
 	/* find the client that has the same cancel_key as this request */
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(pitem, &(threads[thread_id].pool_list)) {
 			pool = container_of(pitem, PgPool, head);
@@ -2584,7 +2580,6 @@ void tag_database_dirty(PgDatabase *db)
 {
 	struct List *item;
 	PgPool *pool;
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -2603,7 +2598,6 @@ void tag_autodb_dirty(void)
 	/*
 	 * reload databases.
 	 */
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].database_list)) {
 			db = container_of(item, PgDatabase, head);
@@ -2645,7 +2639,6 @@ void tag_host_addr_dirty(const char *host, const struct sockaddr *sa)
 
 	memset(&addr, 0, sizeof(addr));
 	pga_copy(&addr, sa);
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 	statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -2699,7 +2692,6 @@ void objects_cleanup(void)
 
 
 	
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each_safe(item, &(threads[thread_id].autodatabase_idle_list), tmp) {
 			db = container_of(item, PgDatabase, head);

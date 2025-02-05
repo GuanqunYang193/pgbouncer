@@ -302,7 +302,6 @@ void varcache_add_params(PktBuf *pkt, VarCache *vars)
 
 void varcache_deinit(void)
 {
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		strpool_free(threads[thread_id].vpool);
 		threads[thread_id].vpool = NULL;

@@ -119,7 +119,6 @@ static int count_paused_databases(void)
 	PgDatabase *db;
 	int cnt = 0;
 	// FIXME find a better way to count 
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].database_list)) {
 			db = container_of(item, PgDatabase, head);
@@ -134,7 +133,6 @@ static int count_db_active(PgDatabase *db)
 	struct List *item;
 	PgPool *pool;
 	int cnt = 0;
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -358,7 +356,6 @@ static bool show_one_fd(PgSocket *admin, PgSocket *sk, int thread_id)
 		return false;
 
 	if (sk->pool && sk->pool->db->auth_user_credentials && sk->login_user_credentials){
-		int thread_id;
 		bool user_found = true;
 		FOR_EACH_THREAD(thread_id){
 			if(!find_global_user(sk->login_user_credentials->name, thread_id)){
@@ -373,7 +370,6 @@ static bool show_one_fd(PgSocket *admin, PgSocket *sk, int thread_id)
 	/* PAM requires passwords as well since they are not stored externally */
 	if (cf_auth_type == AUTH_TYPE_PAM ){
 		// FIXME wrong user searching
-		int thread_id;
 		bool user_found = true;
 		FOR_EACH_THREAD(thread_id){
 			if(!find_global_user(sk->login_user_credentials->name, thread_id)){
@@ -479,14 +475,12 @@ static bool admin_show_fds(PgSocket *admin, const char *arg)
 		res = show_pooler_fds(admin);
 
 	if (res){
-		int thread_id;
 		FOR_EACH_THREAD(thread_id){
 			// TODO correct me
 			res &= show_fds_from_list(admin, &(threads[thread_id].login_client_list), thread_id);
 		}
 	}
 
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -540,7 +534,6 @@ static bool admin_show_databases(PgSocket *admin, const char *arg)
 				    "current_connections", "max_client_connections", "current_client_connections",
 				    "paused", "disabled");
 	// FIXME how to deduplicate databases
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].database_list)) {
 			db = container_of(item, PgDatabase, head);
@@ -620,7 +613,6 @@ static bool admin_show_lists(PgSocket *admin, const char *arg)
 	int total_pool_list = 0;
 	int total_peer_pool_list = 0;
 	int database_count = 0;
-	int thread_id;
 	int total_free_clients = 0;
 	int total_used_clients = 0;
 	int total_free_servers = 0;
@@ -683,7 +675,6 @@ static bool admin_show_users(PgSocket *admin, const char *arg)
 		"max_user_client_connections", "current_client_connections");
 
 	// FIXME wrong user
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].user_list)) {
 			PgGlobalUser *user = container_of(item, PgGlobalUser, head);
@@ -842,7 +833,6 @@ static bool admin_show_clients(PgSocket *admin, const char *arg)
 	}
 
 	socket_header(buf, false);
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -880,7 +870,6 @@ static bool admin_show_servers(PgSocket *admin, const char *arg)
 	}
 
 	socket_header(buf, false);
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -917,7 +906,6 @@ static bool admin_show_sockets(PgSocket *admin, const char *arg)
 	}
 
 	socket_header(buf, true);
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -960,7 +948,6 @@ static bool admin_show_active_sockets(PgSocket *admin, const char *arg)
 	}
 
 	socket_header(buf, true);
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -1016,7 +1003,6 @@ static bool admin_show_pools(PgSocket *admin, const char *arg)
 				    "maxwait_us", "pool_mode",
 				    "load_balance_hosts");
 	
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -1071,7 +1057,6 @@ static bool admin_show_peer_pools(PgSocket *admin, const char *arg)
 				    "cl_waiting_cancel_req",
 				    "sv_active_cancel",
 				    "sv_login");
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].peer_pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -1313,7 +1298,6 @@ static bool admin_cmd_resume(PgSocket *admin, const char *arg)
 			return admin_error(admin, "pooler is not paused/suspended");
 		}
 	} else {
-		int thread_id;
 		PgDatabase *db = NULL;
 		FOR_EACH_THREAD(thread_id){
 			db = find_database(arg, thread_id);
@@ -1373,7 +1357,6 @@ static bool admin_cmd_pause(PgSocket *admin, const char *arg)
 	} else {
 		PgDatabase *db;
 		log_info("PAUSE '%s' command issued", arg);
-		int thread_id;
 		FOR_EACH_THREAD(thread_id){
 			db = find_or_register_database(admin, arg, thread_id);
 			if(db){
@@ -1405,7 +1388,6 @@ static bool admin_cmd_reconnect(PgSocket *admin, const char *arg)
 		PgPool *pool;
 
 		log_info("RECONNECT command issued");
-		int thread_id;
 		FOR_EACH_THREAD(thread_id){
 			statlist_for_each(item, &(threads[thread_id].pool_list)) {
 				pool = container_of(item, PgPool, head);
@@ -1418,7 +1400,6 @@ static bool admin_cmd_reconnect(PgSocket *admin, const char *arg)
 		PgDatabase *db;
 
 		log_info("RECONNECT '%s' command issued", arg);
-		int thread_id;
 		FOR_EACH_THREAD(thread_id){
 			db = find_or_register_database(admin, arg, thread_id);
 			if(db){
@@ -1447,7 +1428,6 @@ static bool admin_cmd_disable(PgSocket *admin, const char *arg)
 		return admin_error(admin, "a database is required");
 
 	log_info("DISABLE '%s' command issued", arg);
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		db = find_or_register_database(admin, arg, thread_id);
 		if(db){
@@ -1475,7 +1455,6 @@ static bool admin_cmd_enable(PgSocket *admin, const char *arg)
 		return admin_error(admin, "a database is required");
 
 	log_info("ENABLE '%s' command issued", arg);
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		db = find_database(arg, thread_id);
 		if(db){
@@ -1585,7 +1564,6 @@ static bool admin_cmd_kill(PgSocket *admin, const char *arg)
 		return admin_error(admin, "a database is required");
 
 	log_info("KILL '%s' command issued", arg);
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		db = find_or_register_database(admin, arg, thread_id);
 		if(db){
@@ -1621,7 +1599,6 @@ static bool admin_cmd_wait_close(PgSocket *admin, const char *arg)
 		int active = 0;
 
 		log_info("WAIT_CLOSE command issued");
-		int thread_id;
 		FOR_EACH_THREAD(thread_id){
 			statlist_for_each(item, &(threads[thread_id].pool_list)) {
 				PgDatabase *db;
@@ -1640,7 +1617,6 @@ static bool admin_cmd_wait_close(PgSocket *admin, const char *arg)
 		PgDatabase *db;
 
 		log_info("WAIT_CLOSE '%s' command issued", arg);
-		int thread_id;
 		FOR_EACH_THREAD(thread_id){
 			db = find_or_register_database(admin, arg, thread_id);
 			if(!db){
@@ -1753,7 +1729,6 @@ static bool admin_show_version(PgSocket *admin, const char *arg)
 static bool admin_show_stats(PgSocket *admin, const char *arg)
 {
 	bool res = true;
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		res &= admin_database_stats(admin, &(threads[thread_id].pool_list));
 	}
@@ -1764,7 +1739,6 @@ static bool admin_show_stats(PgSocket *admin, const char *arg)
 static bool admin_show_stats_totals(PgSocket *admin, const char *arg)
 {
 	bool res = true;
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		res &= admin_database_stats_totals(admin, &(threads[thread_id].pool_list));
 	}
@@ -1774,7 +1748,6 @@ static bool admin_show_stats_totals(PgSocket *admin, const char *arg)
 static bool admin_show_stats_averages(PgSocket *admin, const char *arg)
 {
 	bool res = true;
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		res &= admin_database_stats_averages(admin, &(threads[thread_id].pool_list));
 	}
@@ -1784,7 +1757,6 @@ static bool admin_show_stats_averages(PgSocket *admin, const char *arg)
 static bool admin_show_totals(PgSocket *admin, const char *arg)
 {
 	bool res = true;
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		show_stat_totals(admin, &(threads[thread_id].pool_list));
 	}

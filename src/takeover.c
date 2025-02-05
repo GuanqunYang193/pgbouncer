@@ -207,7 +207,6 @@ static void takeover_postprocess_fds(void)
 	struct List *item, *item2;
 	PgSocket *client;
 	PgPool *pool;
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -366,7 +365,6 @@ void takeover_init(void)
 	PgDatabase *db;
 	PgPool *pool = NULL;
 	log_error("takeover init");
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		db = find_database("pgbouncer", thread_id);
 	}

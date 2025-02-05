@@ -5,13 +5,11 @@
 #include <event2/event.h>
 #include <event2/event_struct.h>
 
-#define THREAD_NUM 4
 
-
-#define FOR_EACH_THREAD(id) \
-	for ((id) = 0; \
-	     (id) < THREAD_NUM; \
-	     (id)++)
+#define FOR_EACH_THREAD(id)         \
+	for (int id = 0;                \
+	     (id) < arg_thread_number;   \
+	     (id)++)                    
 
 typedef struct SignalEvent{
     /*
@@ -89,10 +87,11 @@ typedef struct ClientRequest {
     bool is_unix;
 } ClientRequest;
 
-Thread threads[THREAD_NUM];
+Thread *threads;
 extern int next_thread;
 
 void signal_setup(struct event_base * base, struct SignalEvent* signal_event, int thread_id);
 void start_threads();
 void init_threads();
+int wait_threads();
 void clean_threads();

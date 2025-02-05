@@ -3,6 +3,7 @@
 #include <pooler.h>
 
 int next_thread = 0;
+bool multithread_mode = false;
 
 void handle_sigterm_main(evutil_socket_t sock, short flags, void *arg)
 {
@@ -261,16 +262,43 @@ void init_thread(int thread_id){
 void start_threads(){
 	pthread_key_create(&event_base_key, event_base_destructor);
     pthread_key_create(&thread_pointer, NULL);
-	int thread_id;
+
 	FOR_EACH_THREAD(thread_id){	
 		pthread_create(&threads[thread_id].worker, NULL, worker_func, &threads[thread_id]);
 	}
-	// TODO wait until threads ready
-	
 }
 
 void init_threads(){
-	for(int i=0;i<THREAD_NUM;i++){
-		init_thread(i);
+	log_error("allocate %d number of thread", arg_thread_number);
+	if(arg_thread_number > 0)
+		multithread_mode = true;
+	else{
+		return;
 	}
+	log_error("allocate %d number of thread", arg_thread_number);
+	threads = calloc(arg_thread_number, sizeof(Thread));
+	FOR_EACH_THREAD(thread_id){	
+		init_thread(thread_id);
+	}
+}
+
+int wait_threads(){
+	void* retval = NULL;
+	FOR_EACH_THREAD(tmp_thread_id){	
+		int ret = pthread_join(threads[tmp_thread_id].worker, &retval);
+		 if (ret != 0) {
+			log_error(stderr, "pthread_join failed, err=%d\n", ret);
+			return 1;
+		}
+
+		if (retval) {
+			long result = *((long*)retval);
+			log_error("[%d] Thread returned %ld\n", tmp_thread_id, result);
+		}
+	}
+
+	if (retval) {
+		free(retval); 
+	}
+	return 0;
 }

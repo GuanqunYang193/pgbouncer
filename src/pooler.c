@@ -381,7 +381,7 @@ loop:
 
 	// TODO optimize this round-robin! 
 	next_thread++;
-	next_thread %= THREAD_NUM;
+	next_thread %= arg_thread_number;
 	/*
 	 * there may be several clients waiting,
 	 * avoid context switch by looping

@@ -110,7 +110,6 @@ static void resume_sockets(void)
 	struct List *item;
 	PgPool *pool;
 
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
@@ -362,12 +361,12 @@ void per_loop_maint(void)
 	switch (cf_pause_mode) {
 	case P_SUSPEND:
 		if (force_suspend) {
-			for(int i=0;i<THREAD_NUM;i++){
-				close_client_list(&(threads[i].login_client_list), "suspend_timeout");
+			FOR_EACH_THREAD(thread_id){	
+				close_client_list(&(threads[thread_id].login_client_list), "suspend_timeout");
 			}
 		} else {
-			for(int i=0;i<THREAD_NUM;i++){
-				active_count += statlist_count(&(threads[i].login_client_list));
+			FOR_EACH_THREAD(thread_id){	
+				active_count += statlist_count(&(threads[thread_id].login_client_list));
 			}
 		}
 	/* fallthrough */
@@ -881,10 +880,10 @@ void kill_database(PgDatabase *db)
 {
 	PgPool *pool;
 	struct List *item, *tmp;
+	// FIXME this run in main thread
 	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	log_warning("dropping database '%s' as it does not exist anymore or inactive auto-database", db->name);
 
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each_safe(item, &(threads[thread_id].pool_list), tmp) {
 			pool = container_of(item, PgPool, head);
@@ -922,7 +921,6 @@ void kill_peer(PgDatabase *db)
 
 	log_warning("dropping peer %s as it does not exist anymore", db->name);
 
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each_safe(item, &(threads[thread_id].peer_pool_list), tmp) {
 			pool = container_of(item, PgPool, head);
@@ -942,7 +940,6 @@ void config_postprocess(void)
 {
 	struct List *item, *tmp;
 	PgDatabase *db;
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each_safe(item, &(threads[thread_id].database_list), tmp) {
 			db = container_of(item, PgDatabase, head);

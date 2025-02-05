@@ -1347,7 +1347,6 @@ bool sbuf_tls_setup(void)
 	if ((server_connect_conf || new_server_connect_conf) && tls_change_requires_reconnect(new_server_connect_conf)) {
 		struct List *item;
 		PgPool *pool;
-		int thread_id;
 		FOR_EACH_THREAD(thread_id){
 			statlist_for_each(item, &(threads[thread_id].pool_list)) {
 				pool = container_of(item, PgPool, head);

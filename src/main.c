@@ -52,6 +52,7 @@ static void usage(const char *exe)
 	printf("  -u, --user=USERNAME  assume identity of USERNAME\n");
 	printf("  -v, --verbose        increase verbosity\n");
 	printf("  -V, --version        show version, then exit\n");
+	printf("  -T, --thread         number of thread\n");
 	printf("  -h, --help           show this help, then exit\n");
 	printf("\n");
 #ifdef WIN32
@@ -197,6 +198,7 @@ char *cf_server_tls_ciphers;
 
 int cf_max_prepared_statements;
 
+int arg_thread_number = 0;
 /*
  * config file description
  */
@@ -404,7 +406,6 @@ static void set_dbs_dead(bool flag)
 {
 	struct List *item;
 	PgDatabase *db;
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].database_list)) {
 			db = container_of(item, PgDatabase, head);
@@ -629,7 +630,6 @@ static void check_limits(void)
 {
 	struct rlimit lim;
 	int total_users = 0;
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 	 	statlist_count(&(threads[thread_id].user_list));
 	}
@@ -790,6 +790,8 @@ static void cleanup(void)
 
 	reset_logging();
 
+	// TODO thread cleaning
+
 	xfree(&global_username);
 	xfree(&cf_config_file);
 	xfree(&cf_listen_addr);
@@ -844,11 +846,12 @@ int main(int argc, char *argv[])
 		{"version", no_argument, NULL, 'V'},
 		{"reboot", no_argument, NULL, 'R'},
 		{"user", required_argument, NULL, 'u'},
+		{"thread", required_argument, NULL, 'T'},
 		{NULL, 0, NULL, 0}
 	};
 	setprogname(basename(argv[0]));
 	/* parse cmdline */
-	while ((c = getopt_long(argc, argv, "qvhdVRu:", long_options, &long_idx)) != -1) {
+	while ((c = getopt_long(argc, argv, "qvhdVRuT:", long_options, &long_idx)) != -1) {
 		switch (c) {
 		case 'R':
 			cf_reboot = 1;
@@ -877,6 +880,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'h':
 			usage(argv[0]);
+			break;
+		case 'T':
+			arg_thread_number = atoi(optarg);
 			break;
 		default:
 			fprintf(stderr, "Try \"%s --help\" for more information.\n", argv[0]);
@@ -960,6 +966,7 @@ int main(int argc, char *argv[])
     dns_setup();
 
 
+	//TODO fix takeover
 	// if (did_takeover) {
 	// 	takeover_finish();
 	// } else {
@@ -976,29 +983,14 @@ int main(int argc, char *argv[])
 	signal_setup(pgb_event_base, &main_signal_event, -1);
 	start_threads();
 	pooler_setup();
-	void* retval = NULL;
     
 	/* main loop */
 	while (cf_shutdown != SHUTDOWN_IMMEDIATE)
 		main_loop_once();
 
 
-	for(int i=0;i<THREAD_NUM;i++){
-		int ret = pthread_join(threads[i].worker, &retval);
-		 if (ret != 0) {
-			fprintf(stderr, "pthread_join failed, err=%d\n", ret);
-			return 1;
-		}
-
-		if (retval) {
-			long result = *((long*)retval);
-			printf("[%d] Thread returned %ld\n", i, result);
-		}
-	}
-
-	if (retval) {
-		free(retval); 
-	}
+	if(multithread_mode)
+		return wait_threads();
 
 	return 0;
 }

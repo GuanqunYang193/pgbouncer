@@ -245,7 +245,6 @@ fail:
 	return false;
 }
 bool parse_database_multithread(void *base, const char *name, const char *connstr){
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		parse_database(base, name, connstr, thread_id);
 	}
@@ -564,7 +563,6 @@ bool parse_user(void *base, const char *name, const char *connstr)
 		}
 	}
 
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		user = find_or_add_new_global_user(name, "", thread_id);
 	}
@@ -684,7 +682,6 @@ bool loader_users_check(void)
 static void disable_users(void)
 {
 	struct List *item;
-	int thread_id;
 	FOR_EACH_THREAD(thread_id){
 		statlist_for_each(item, &(threads[thread_id].user_list)) {
 			PgGlobalUser *user = container_of(item, PgGlobalUser, head);
@@ -701,7 +698,6 @@ bool load_auth_file(const char *fn)
 	/* No file to load? */
 	if (fn == NULL)
 		return false;
-
 	buf = load_file(fn, NULL);
 	if (buf == NULL) {
 		log_error("could not open auth_file %s: %s", fn, strerror(errno));
@@ -759,7 +755,6 @@ bool load_auth_file(const char *fn)
 		*p++ = 0;	/* tag password end */
 
 		/* send them away */
-		int thread_id;
 		FOR_EACH_THREAD(thread_id){
 			unquote_add_authfile_user(user, password, thread_id);
 		}
