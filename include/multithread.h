@@ -39,19 +39,35 @@ typedef struct Thread {
     struct event ev_handle_request;
     int pipefd[2];
     struct StatList login_client_list;
+
     struct StatList pool_list;
+    pthread_mutex_t pool_list_lock;
+
     struct StatList peer_pool_list;
     struct SignalEvent signal_event;
+
     struct StatList database_list;
+    pthread_mutex_t database_list_lock;
+
     struct StatList autodatabase_idle_list;
+    pthread_mutex_t autodatabase_idle_list_lock;
+
     struct StatList user_list;
     struct Slab *client_cache;
     struct Slab *user_cache;
     struct Slab *server_cache;
+
     struct Slab *pool_cache;
+    pthread_mutex_t pool_cache_lock;
+
     struct Slab *peer_pool_cache;
+
     struct Slab *db_cache;
+    pthread_mutex_t db_cache_lock;
+    
     struct Slab *var_list_cache;
+    pthread_mutex_t var_list_cache_lock;
+
     struct Slab *iobuf_cache;
     struct Slab *server_prepared_statement_cache;
     struct Slab *outstanding_request_cache;

@@ -120,10 +120,12 @@ static int count_paused_databases(void)
 	int cnt = 0;
 	// FIXME find a better way to count 
 	FOR_EACH_THREAD(thread_id){
+		pthread_mutex_lock(&threads[thread_id].database_list_lock);
 		statlist_for_each(item, &(threads[thread_id].database_list)) {
 			db = container_of(item, PgDatabase, head);
 			cnt += db->db_paused;
 		}
+		pthread_mutex_unlock(&threads[thread_id].database_list_lock);
 	}
 	return cnt;
 }
@@ -134,12 +136,14 @@ static int count_db_active(PgDatabase *db)
 	PgPool *pool;
 	int cnt = 0;
 	FOR_EACH_THREAD(thread_id){
+		pthread_mutex_lock(&threads[thread_id].pool_list_lock);
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
-			if (pool->db != db)
+			if (pool->db->name != db->name)
 				continue;
 			cnt += pool_server_count(pool);
 		}
+		pthread_mutex_unlock(&threads[thread_id].pool_list_lock);
 	}
 	return cnt;
 }
@@ -1299,18 +1303,24 @@ static bool admin_cmd_resume(PgSocket *admin, const char *arg)
 		}
 	} else {
 		PgDatabase *db = NULL;
-		FOR_EACH_THREAD(thread_id){
-			db = find_database(arg, thread_id);
-			if(db){
-				break;
-			}
-		}
 		log_info("RESUME '%s' command issued", arg);
-		if (db == NULL)
-			return admin_error(admin, "no such database: %s", arg);
-		if (!db->db_paused)
-			return admin_error(admin, "database %s is not paused", arg);
-		db->db_paused = false;
+		FOR_EACH_THREAD(thread_id) {
+			pthread_mutex_lock(&threads[thread_id].autodatabase_idle_list_lock);
+			pthread_mutex_lock(&threads[thread_id].database_list_lock);
+
+			db = find_database(arg, thread_id);
+			if (db != NULL && db->db_paused)
+				db->db_paused = false;
+
+			pthread_mutex_unlock(&threads[thread_id].database_list_lock);
+			pthread_mutex_unlock(&threads[thread_id].autodatabase_idle_list_lock);
+
+			if (db == NULL)
+				return admin_error(admin, "no such database: %s", arg);
+			if (!db->db_paused)
+				return admin_error(admin, "database %s is not paused", arg);
+			db = NULL;
+		}
 	}
 	return admin_ready(admin, "RESUME");
 }
@@ -1358,16 +1368,25 @@ static bool admin_cmd_pause(PgSocket *admin, const char *arg)
 		PgDatabase *db;
 		log_info("PAUSE '%s' command issued", arg);
 		FOR_EACH_THREAD(thread_id){
+			pthread_mutex_lock(&threads[thread_id].db_cache_lock);
+			pthread_mutex_lock(&threads[thread_id].autodatabase_idle_list_lock);
+			pthread_mutex_lock(&threads[thread_id].database_list_lock);
+
 			db = find_or_register_database(admin, arg, thread_id);
-			if(db){
-				break;
-			}
+			
+			if (db != NULL && db->name != admin->pool->db->name)
+				db->db_paused = true;
+
+			pthread_mutex_unlock(&threads[thread_id].database_list_lock);
+			pthread_mutex_unlock(&threads[thread_id].autodatabase_idle_list_lock);
+			pthread_mutex_unlock(&threads[thread_id].db_cache_lock);
+
+			if (db == NULL)
+				return admin_error(admin, "no such database: %s", arg);
+			if (db->name == admin->pool->db->name)
+				return admin_error(admin, "cannot pause admin db: %s", arg);
 		}
-		if (db == NULL)
-			return admin_error(admin, "no such database: %s", arg);
-		if (db == admin->pool->db)
-			return admin_error(admin, "cannot pause admin db: %s", arg);
-		db->db_paused = true;
+		
 		if (count_db_active(db) > 0)
 			admin->wait_for_response = true;
 		else
@@ -1384,6 +1403,8 @@ static bool admin_cmd_reconnect(PgSocket *admin, const char *arg)
 		return admin_error(admin, "admin access needed");
 
 	if (!arg[0]) {
+		// TODO(beihao): Fix the general case
+		// deadlock if i lock pool_list_lock outside as tag_database_dirty calls tag_pool dirty
 		struct List *item;
 		PgPool *pool;
 
@@ -1401,16 +1422,26 @@ static bool admin_cmd_reconnect(PgSocket *admin, const char *arg)
 
 		log_info("RECONNECT '%s' command issued", arg);
 		FOR_EACH_THREAD(thread_id){
+			pthread_mutex_lock(&threads[thread_id].db_cache_lock);
+			pthread_mutex_lock(&threads[thread_id].autodatabase_idle_list_lock);
+			pthread_mutex_lock(&threads[thread_id].database_list_lock);
+
 			db = find_or_register_database(admin, arg, thread_id);
-			if(db){
-				break;
+
+			if (db != NULL && db->name != admin->pool->db->name) {
+				tag_database_dirty(db);
 			}
+
+			pthread_mutex_unlock(&threads[thread_id].database_list_lock);
+			pthread_mutex_unlock(&threads[thread_id].autodatabase_idle_list_lock);
+			pthread_mutex_unlock(&threads[thread_id].db_cache_lock);
+
+			if (db == NULL)
+				return admin_error(admin, "no such database: %s", arg);
+			if (db->name == admin->pool->db->name)
+				return admin_error(admin, "cannot reconnect admin db: %s", arg);
+			
 		}
-		if (db == NULL)
-			return admin_error(admin, "no such database: %s", arg);
-		if (db == admin->pool->db)
-			return admin_error(admin, "cannot reconnect admin db: %s", arg);
-		tag_database_dirty(db);
 	}
 
 	return admin_ready(admin, "RECONNECT");
@@ -1429,24 +1460,33 @@ static bool admin_cmd_disable(PgSocket *admin, const char *arg)
 
 	log_info("DISABLE '%s' command issued", arg);
 	FOR_EACH_THREAD(thread_id){
-		db = find_or_register_database(admin, arg, thread_id);
-		if(db){
-			break;
-		}
-	}
-	if (db == NULL)
-		return admin_error(admin, "no such database: %s", arg);
-	if (db->admin)
-		return admin_error(admin, "cannot disable admin db: %s", arg);
+		pthread_mutex_lock(&threads[thread_id].db_cache_lock);
+		pthread_mutex_lock(&threads[thread_id].autodatabase_idle_list_lock);
+		pthread_mutex_lock(&threads[thread_id].database_list_lock);
 
-	db->db_disabled = true;
+		db = find_or_register_database(admin, arg, thread_id);
+
+		if (db != NULL && !db->admin)
+			db->db_disabled = true;
+
+		pthread_mutex_unlock(&threads[thread_id].database_list_lock);
+		pthread_mutex_unlock(&threads[thread_id].autodatabase_idle_list_lock);
+		pthread_mutex_unlock(&threads[thread_id].db_cache_lock);
+		
+		if (db == NULL)
+			return admin_error(admin, "no such database: %s", arg);
+		if (db->admin) 
+			return admin_error(admin, "cannot disable admin db: %s", arg);
+		db = NULL;
+	}
+	
 	return admin_ready(admin, "DISABLE");
 }
 
 /* Command: ENABLE */
 static bool admin_cmd_enable(PgSocket *admin, const char *arg)
 {
-	PgDatabase *db;
+    PgDatabase *db = NULL;
 
 	if (!admin->admin_user)
 		return admin_error(admin, "admin access needed");
@@ -1454,20 +1494,27 @@ static bool admin_cmd_enable(PgSocket *admin, const char *arg)
 	if (!arg[0])
 		return admin_error(admin, "a database is required");
 
-	log_info("ENABLE '%s' command issued", arg);
-	FOR_EACH_THREAD(thread_id){
-		db = find_database(arg, thread_id);
-		if(db){
-			break;
-		}
-	}
-	if (db == NULL)
-		return admin_error(admin, "no such database: %s", arg);
-	if (db->admin)
-		return admin_error(admin, "cannot disable admin db: %s", arg);
+    log_info("ENABLE '%s' command issued", arg);
 
-	db->db_disabled = false;
-	return admin_ready(admin, "ENABLE");
+    FOR_EACH_THREAD(thread_id) {
+        pthread_mutex_lock(&threads[thread_id].autodatabase_idle_list_lock);
+		pthread_mutex_lock(&threads[thread_id].database_list_lock);
+
+        db = find_database(arg, thread_id);
+		if (db != NULL && !db->admin)
+			db->db_disabled = false;
+
+		pthread_mutex_unlock(&threads[thread_id].database_list_lock);
+		pthread_mutex_unlock(&threads[thread_id].autodatabase_idle_list_lock);
+
+		if (db == NULL)
+			return admin_error(admin, "no such database: %s", arg);
+		if (db->admin) 
+			return admin_error(admin, "cannot enable admin db: %s", arg);
+		db = NULL;
+	}
+
+    return admin_ready(admin, "ENABLE");
 }
 
 
@@ -1550,9 +1597,9 @@ static bool admin_cmd_kill_client(PgSocket *admin, const char *arg)
 /* Command: KILL */
 static bool admin_cmd_kill(PgSocket *admin, const char *arg)
 {
-	struct List *item, *tmp;
-	PgDatabase *db;
-	PgPool *pool;
+    struct List *item, *tmp;
+    PgDatabase *db = NULL;
+    PgPool *pool = NULL;
 
 	if (!admin->admin_user)
 		return admin_error(admin, "admin access needed");
@@ -1565,23 +1612,40 @@ static bool admin_cmd_kill(PgSocket *admin, const char *arg)
 
 	log_info("KILL '%s' command issued", arg);
 	FOR_EACH_THREAD(thread_id){
-		db = find_or_register_database(admin, arg, thread_id);
-		if(db){
-			break;
-		}
-	}
-	if (db == NULL)
-		return admin_error(admin, "no such database: %s", arg);
-	if (db == admin->pool->db)
-		return admin_error(admin, "cannot kill admin db: %s", arg);
+		pthread_mutex_lock(&threads[thread_id].db_cache_lock);
+		pthread_mutex_lock(&threads[thread_id].autodatabase_idle_list_lock);
+		pthread_mutex_lock(&threads[thread_id].database_list_lock);
 
-	db->db_paused = true;
+		db = find_or_register_database(admin, arg, thread_id);
+
+		if (db != NULL && !db->admin)
+			db->db_paused = true;
+
+		pthread_mutex_unlock(&threads[thread_id].database_list_lock);
+		pthread_mutex_unlock(&threads[thread_id].autodatabase_idle_list_lock);
+		pthread_mutex_unlock(&threads[thread_id].db_cache_lock);
+
+		if (db == NULL)
+			return admin_error(admin, "no such database: %s", arg);
+		if (db->admin) 
+			return admin_error(admin, "cannot kill admin db: %s", arg);
+		db = NULL;
+	}
+
 	FOR_EACH_THREAD(thread_id){
+		pthread_mutex_lock(&threads[thread_id].pool_list_lock);
+		pthread_mutex_lock(&threads[thread_id].pool_cache_lock);
+		pthread_mutex_lock(&threads[thread_id].var_list_cache_lock);
+		
 		statlist_for_each_safe(item, &(threads[thread_id].pool_list), tmp) {
 			pool = container_of(item, PgPool, head);
 			if (pool->db == db)
 				kill_pool(pool, thread_id);
 		}
+
+		pthread_mutex_unlock(&threads[thread_id].var_list_cache_lock);
+		pthread_mutex_unlock(&threads[thread_id].pool_cache_lock);
+		pthread_mutex_unlock(&threads[thread_id].pool_list_lock);
 	}
 
 	return admin_ready(admin, "KILL");
@@ -1594,6 +1658,7 @@ static bool admin_cmd_wait_close(PgSocket *admin, const char *arg)
 		return admin_error(admin, "admin access needed");
 
 	if (!arg[0]) {
+		// TODO(beihao)
 		struct List *item;
 		PgPool *pool;
 		int active = 0;
@@ -1618,16 +1683,24 @@ static bool admin_cmd_wait_close(PgSocket *admin, const char *arg)
 
 		log_info("WAIT_CLOSE '%s' command issued", arg);
 		FOR_EACH_THREAD(thread_id){
+			pthread_mutex_lock(&threads[thread_id].db_cache_lock);
+			pthread_mutex_lock(&threads[thread_id].autodatabase_idle_list_lock);
+			pthread_mutex_lock(&threads[thread_id].database_list_lock);
+
 			db = find_or_register_database(admin, arg, thread_id);
-			if(!db){
-				break;
-			}
+			if (db != NULL && db->name != admin->pool->db->name)
+				db->db_wait_close = true;
+
+			pthread_mutex_unlock(&threads[thread_id].database_list_lock);
+			pthread_mutex_unlock(&threads[thread_id].autodatabase_idle_list_lock);
+			pthread_mutex_unlock(&threads[thread_id].db_cache_lock);
+
+			if (db == NULL)
+				return admin_error(admin, "no such database: %s", arg);
+			if (db->name == admin->pool->db->name)
+				return admin_error(admin, "cannot wait in admin db: %s", arg);
 		}
-		if (db == NULL)
-			return admin_error(admin, "no such database: %s", arg);
-		if (db == admin->pool->db)
-			return admin_error(admin, "cannot wait in admin db: %s", arg);
-		db->db_wait_close = true;
+		
 		if (count_db_active(db) > 0)
 			admin->wait_for_response = true;
 		else
@@ -1777,12 +1850,12 @@ static struct cmd_lookup show_map [] = {
 	{"servers", admin_show_servers},
 	{"sockets", admin_show_sockets},
 	{"active_sockets", admin_show_active_sockets},
-	{"stats", admin_show_stats}, // TODO: check
-	{"stats_totals", admin_show_stats_totals}, // TODO: check
-	{"stats_averages", admin_show_stats_averages}, // TODO: check
+	{"stats", admin_show_stats}, // TODO(beihao): check
+	{"stats_totals", admin_show_stats_totals}, // TODO(beihao): check
+	{"stats_averages", admin_show_stats_averages}, // TODO(beihao): check
 	{"users", admin_show_users},
 	{"version", admin_show_version},
-	{"totals", admin_show_totals}, // TODO: check
+	{"totals", admin_show_totals}, // TODO(beihao): check
 	{"mem", admin_show_mem},
 	{"dns_hosts", admin_show_dns_hosts},
 	{"dns_zones", admin_show_dns_zones},
@@ -1801,14 +1874,14 @@ static struct cmd_lookup cmd_list [] = {
 	{"disable", admin_cmd_disable},
 	{"enable", admin_cmd_enable},
 	{"kill", admin_cmd_kill},
-	{"kill_client", admin_cmd_kill_client},
+	{"kill_client", admin_cmd_kill_client}, // TODO(beihao)
 	{"pause", admin_cmd_pause},
 	{"reconnect", admin_cmd_reconnect},
 	{"reload", admin_cmd_reload},
 	{"resume", admin_cmd_resume},
 	{"select", admin_cmd_show},
 	{"show", admin_cmd_show},
-	{"shutdown", admin_cmd_shutdown},
+	{"shutdown", admin_cmd_shutdown}, // TODO(beihao)
 	{"suspend", admin_cmd_suspend},
 	{"wait_close", admin_cmd_wait_close},
 	{NULL, NULL}

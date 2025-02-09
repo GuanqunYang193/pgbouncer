@@ -158,9 +158,14 @@ void init_objects(void)
 		aatree_init(&(threads[thread_id].user_tree), global_user_node_cmp, NULL);
 		aatree_init(&(threads[thread_id].pam_user_tree), credentials_node_cmp, NULL);
 
+		pthread_mutex_init(&threads[thread_id].pool_cache_lock, NULL);
 		threads[thread_id].pool_cache = slab_create(pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
+
 		threads[thread_id].peer_pool_cache = slab_create(peer_pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
+
+		pthread_mutex_init(&threads[thread_id].db_cache_lock, NULL);
 		threads[thread_id].db_cache = slab_create(db_cache_name, sizeof(PgDatabase), 0, NULL, USUAL_ALLOC);
+
 		threads[thread_id].outstanding_request_cache = slab_create(outstanding_request_cache_name, sizeof(OutstandingRequest), 0, NULL, USUAL_ALLOC);
 		threads[thread_id].user_cache = slab_create(user_cache_name, sizeof(PgGlobalUser), 0, NULL, USUAL_ALLOC);
 
@@ -203,7 +208,6 @@ void init_caches(void)
         char var_list_cache_name[MAX_SLAB_NAME];
         char server_prepared_statement_cache_name[MAX_SLAB_NAME];
 
-
         snprintf(server_cache_name, MAX_SLAB_NAME, "server_cache_thread_%d", thread_id);
         snprintf(client_cache_name, MAX_SLAB_NAME, "client_cache_thread_%d", thread_id);
         snprintf(iobuf_cache_name, MAX_SLAB_NAME, "iobuf_cache_thread_%d", thread_id);
@@ -213,7 +217,10 @@ void init_caches(void)
 		threads[thread_id].server_cache = slab_create(server_cache_name, sizeof(PgSocket), 0, construct_server, USUAL_ALLOC);
 		threads[thread_id].client_cache = slab_create(client_cache_name, sizeof(PgSocket), 0, construct_client, USUAL_ALLOC);
 		threads[thread_id].iobuf_cache = slab_create(iobuf_cache_name, IOBUF_SIZE, 0, do_iobuf_reset, USUAL_ALLOC);
+
+		pthread_mutex_init(&threads[thread_id].var_list_cache_lock, NULL);
 		threads[thread_id].var_list_cache = slab_create(var_list_cache_name, sizeof(struct PStr *) * get_num_var_cached(), 0, NULL, USUAL_ALLOC);
+
 		threads[thread_id].server_prepared_statement_cache = slab_create(server_prepared_statement_cache_name, sizeof(PgServerPreparedStatement), 0, NULL, USUAL_ALLOC);
 	}
 }
@@ -2581,11 +2588,13 @@ void tag_database_dirty(PgDatabase *db)
 	struct List *item;
 	PgPool *pool;
 	FOR_EACH_THREAD(thread_id){
+		pthread_mutex_lock(&threads[thread_id].pool_list_lock);
 		statlist_for_each(item, &(threads[thread_id].pool_list)) {
 			pool = container_of(item, PgPool, head);
-			if (pool->db == db)
+			if (pool->db->name == db->name)
 				tag_pool_dirty(pool);
 		}
+		pthread_mutex_unlock(&threads[thread_id].pool_list_lock);
 	}
 }
 
@@ -2735,12 +2744,15 @@ void objects_cleanup(void)
 		threads[thread_id].peer_pool_cache = NULL;
 		slab_destroy(threads[thread_id].pool_cache);
 		threads[thread_id].pool_cache = NULL;
+		pthread_mutex_destroy(&(threads[thread_id].pool_cache_lock));
 		slab_destroy(threads[thread_id].db_cache);
 		threads[thread_id].db_cache = NULL;
+		pthread_mutex_destroy(&(threads[thread_id].db_cache_lock));
 		slab_destroy(threads[thread_id].iobuf_cache);
 		threads[thread_id].iobuf_cache = NULL;
 		slab_destroy(threads[thread_id].var_list_cache);
 		threads[thread_id].var_list_cache = NULL;
+		pthread_mutex_destroy(&(threads[thread_id].var_list_cache_lock));
 		slab_destroy(threads[thread_id].server_prepared_statement_cache);
 		threads[thread_id].server_prepared_statement_cache = NULL;
 		slab_destroy(threads[thread_id].outstanding_request_cache);
