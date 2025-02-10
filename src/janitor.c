@@ -327,10 +327,13 @@ void per_loop_maint(void)
 		if (stime >= cf_suspend_timeout)
 			force_suspend = true;
 	}
-
-	int thread_id;
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-	statlist_for_each(item, &(this_thread->pool_list)) {
+	struct StatList* pool_list_ = &pool_list;
+	if(multithread_mode){
+		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		pool_list_ = &(this_thread->pool_list);
+	}
+	
+	statlist_for_each(item, pool_list_) {
 		pool = container_of(item, PgPool, head);
 		if (pool->db->admin)
 			continue;
@@ -357,16 +360,21 @@ void per_loop_maint(void)
 		}
 	}
 	
+	struct StatList* login_client_list_ = &login_client_list;
+	if(multithread_mode){
+		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		login_client_list_ = &(this_thread->login_client_list);
+	}
 
 	switch (cf_pause_mode) {
 	case P_SUSPEND:
 		if (force_suspend) {
 			FOR_EACH_THREAD(thread_id){	
-				close_client_list(&(threads[thread_id].login_client_list), "suspend_timeout");
+				close_client_list(login_client_list_, "suspend_timeout");
 			}
 		} else {
 			FOR_EACH_THREAD(thread_id){	
-				active_count += statlist_count(&(threads[thread_id].login_client_list));
+				active_count += statlist_count(login_client_list_);
 			}
 		}
 	/* fallthrough */

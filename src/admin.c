@@ -1989,8 +1989,12 @@ void admin_setup(void)
 	int res;
 
 	/* fake database */
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-	db = add_database("pgbouncer", this_thread->thread_id);
+	int thread_id = -1;
+	if(multithread_mode){
+		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		thread_id = this_thread->thread_id;
+	}
+	db = add_database("pgbouncer", thread_id);
 	if (!db)
 		die("no memory for admin database");
 
@@ -1998,7 +2002,7 @@ void admin_setup(void)
 	db->pool_size = 2;
 	db->admin = true;
 	db->pool_mode = POOL_STMT;
-	if (!force_user_credentials(db, "pgbouncer", "", this_thread->thread_id))
+	if (!force_user_credentials(db, "pgbouncer", "", thread_id))
 		die("no mem on startup - cannot alloc pgbouncer user");
 
 	/* fake pool */
@@ -2008,7 +2012,7 @@ void admin_setup(void)
 	admin_pool = pool;
 
 	/* find an existing user or create a new fake user with disabled password */
-	user = find_or_add_new_global_user("pgbouncer", "", this_thread->thread_id);
+	user = find_or_add_new_global_user("pgbouncer", "", thread_id);
 	if (!user) {
 		die("cannot create admin user?");
 	}
