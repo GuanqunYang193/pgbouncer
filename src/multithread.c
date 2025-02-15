@@ -209,6 +209,7 @@ void* worker_func(void* arg){
     }
 
     pthread_setspecific(event_base_key, base);
+	this_thread->base = base;
 
 	admin_setup();
     thread_pooler_setup();

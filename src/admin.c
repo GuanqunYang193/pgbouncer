@@ -1259,8 +1259,13 @@ static bool admin_cmd_shutdown(PgSocket *admin, const char *arg)
 	cf_shutdown = mode;
 	if (mode == SHUTDOWN_IMMEDIATE) {
 		log_info("SHUTDOWN command issued");
-		struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
-		event_base_loopbreak(base);
+
+		FOR_EACH_THREAD(thread_id) {
+			threads[thread_id].cf_shutdown = SHUTDOWN_IMMEDIATE;
+			event_base_loopbreak(threads[thread_id].base);
+		}
+
+		event_base_loopbreak(pgb_event_base);
 		/*
 		 * By not running admin_ready the connection is kept open
 		 * until the process is actually shut down.
@@ -1403,12 +1408,17 @@ static bool admin_cmd_reconnect(PgSocket *admin, const char *arg)
 		return admin_error(admin, "admin access needed");
 
 	if (!arg[0]) {
-		// TODO(beihao): Fix the general case
-		// deadlock if i lock pool_list_lock outside as tag_database_dirty calls tag_pool dirty
 		struct List *item;
 		PgPool *pool;
 
 		log_info("RECONNECT command issued");
+
+		FOR_EACH_THREAD(thread_id) {
+			pthread_mutex_lock(&threads[thread_id].db_cache_lock);
+			pthread_mutex_lock(&threads[thread_id].autodatabase_idle_list_lock);
+			pthread_mutex_lock(&threads[thread_id].database_list_lock);
+		}
+
 		FOR_EACH_THREAD(thread_id){
 			statlist_for_each(item, &(threads[thread_id].pool_list)) {
 				pool = container_of(item, PgPool, head);
@@ -1416,6 +1426,12 @@ static bool admin_cmd_reconnect(PgSocket *admin, const char *arg)
 					continue;
 				tag_database_dirty(pool->db);
 			}
+		}
+
+		FOR_EACH_THREAD(thread_id) {
+			pthread_mutex_unlock(&threads[thread_id].database_list_lock);
+			pthread_mutex_unlock(&threads[thread_id].autodatabase_idle_list_lock);
+			pthread_mutex_unlock(&threads[thread_id].db_cache_lock);
 		}
 	} else {
 		PgDatabase *db;
@@ -1658,12 +1674,18 @@ static bool admin_cmd_wait_close(PgSocket *admin, const char *arg)
 		return admin_error(admin, "admin access needed");
 
 	if (!arg[0]) {
-		// TODO(beihao)
 		struct List *item;
 		PgPool *pool;
 		int active = 0;
 
 		log_info("WAIT_CLOSE command issued");
+
+		FOR_EACH_THREAD(thread_id) {
+			pthread_mutex_lock(&threads[thread_id].db_cache_lock);
+			pthread_mutex_lock(&threads[thread_id].autodatabase_idle_list_lock);
+			pthread_mutex_lock(&threads[thread_id].database_list_lock);
+		}
+
 		FOR_EACH_THREAD(thread_id){
 			statlist_for_each(item, &(threads[thread_id].pool_list)) {
 				PgDatabase *db;
@@ -1674,6 +1696,13 @@ static bool admin_cmd_wait_close(PgSocket *admin, const char *arg)
 				active += count_db_active(db);
 			}
 		}
+
+		FOR_EACH_THREAD(thread_id) {
+			pthread_mutex_unlock(&threads[thread_id].database_list_lock);
+			pthread_mutex_unlock(&threads[thread_id].autodatabase_idle_list_lock);
+			pthread_mutex_unlock(&threads[thread_id].db_cache_lock);
+		}
+
 		if (active > 0)
 			admin->wait_for_response = true;
 		else
@@ -1881,7 +1910,7 @@ static struct cmd_lookup cmd_list [] = {
 	{"resume", admin_cmd_resume},
 	{"select", admin_cmd_show},
 	{"show", admin_cmd_show},
-	{"shutdown", admin_cmd_shutdown}, // TODO(beihao)
+	{"shutdown", admin_cmd_shutdown},
 	{"suspend", admin_cmd_suspend},
 	{"wait_close", admin_cmd_wait_close},
 	{NULL, NULL}

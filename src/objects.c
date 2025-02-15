@@ -749,6 +749,8 @@ static PgPool *new_pool(PgDatabase *db, PgCredentials *user_credentials)
 	pool->user_credentials = user_credentials;
 	pool->db = db;
 
+	// TODO(beihao): double check if we want lock for each of them
+	// since KILL_CLIENT from admin will cause concurrency issue
 	statlist_init(&pool->active_client_list, "active_client_list");
 	statlist_init(&pool->waiting_client_list, "waiting_client_list");
 	statlist_init(&pool->active_server_list, "active_server_list");

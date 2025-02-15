@@ -34,6 +34,7 @@ typedef struct Thread {
 
     pthread_t worker;
     int thread_id;
+    struct event_base *base;
     struct event full_maint_ev;
     struct event ev_stats;
     struct event ev_handle_request;
