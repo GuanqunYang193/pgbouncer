@@ -278,12 +278,8 @@ void start_threads(){
 }
 
 void init_threads(){
-	log_error("allocate %d number of thread", arg_thread_number);
-	if(arg_thread_number > 0)
-		multithread_mode = true;
-	else{
+	if(arg_thread_number < 1)
 		return;
-	}
 	log_error("allocate %d number of thread", arg_thread_number);
 	threads = calloc(arg_thread_number, sizeof(Thread));
 	FOR_EACH_THREAD(thread_id){	

@@ -694,21 +694,26 @@ static void main_loop_once(void)
 {
 	int err;
 
-	// reset_time_cache();
+	// FIXME understand why need to reset time cachea
+	if(!multithread_mode){
+		reset_time_cache();
+	}
 
 	err = event_base_loop(pgb_event_base, EVLOOP_ONCE);
 	if (err < 0) {
 		if (errno != EINTR)
 			log_warning("event_loop failed: %s", strerror(errno));
 	}
-	// pam_poll();
-	// per_loop_maint();
-	// reuse_just_freed_objects();
-	// rescue_timers();
-	// per_loop_pooler_maint();
 
-	// if (adns)
-	// 	adns_per_loop(adns);
+	if(!multithread_mode){
+		pam_poll();
+		per_loop_maint();
+		reuse_just_freed_objects();
+		rescue_timers();
+		per_loop_pooler_maint();
+		if (adns)
+			adns_per_loop(adns);
+	}
 }
 
 static void takeover_part1(void)
@@ -883,6 +888,11 @@ int main(int argc, char *argv[])
 			break;
 		case 'T':
 			arg_thread_number = atoi(optarg);
+			multithread_mode = true;
+			if(arg_thread_number < 1){
+				fprintf(stderr, "invalid thread number: %d", arg_thread_number);
+				exit(1);
+			}
 			break;
 		default:
 			fprintf(stderr, "Try \"%s --help\" for more information.\n", argv[0]);
@@ -906,7 +916,9 @@ int main(int argc, char *argv[])
 	 */
 	atexit(cleanup);
 #endif
-	init_threads();
+	if(multithread_mode)
+		init_threads();	
+	
 	init_objects();
 	load_config();
 	main_config.loaded = true;
@@ -930,6 +942,8 @@ int main(int argc, char *argv[])
 	/* disallow running as root */
 	if (getuid() == 0)
 		die("PgBouncer should not run as root");
+
+	admin_setup();
 
 	if (cf_reboot) {
 		log_warning("Online restart is deprecated, use so_reuseport instead");
@@ -964,14 +978,17 @@ int main(int argc, char *argv[])
 	if (!(pgb_event_base = event_base_new()))
 		die("event_base_new() failed");
     dns_setup();
+	signal_setup(pgb_event_base, &main_signal_event, -1);
+	janitor_setup();
+	stats_setup();
 
+	pam_init();
 
-	//TODO fix takeover
-	// if (did_takeover) {
-	// 	takeover_finish();
-	// } else {
-	// 	pooler_setup();
-	// }
+	if (did_takeover) {
+		takeover_finish();
+	} else {
+		pooler_setup();
+	}
 
 	write_pidfile();
 
@@ -980,9 +997,8 @@ int main(int argc, char *argv[])
 		 tls_backend_version());
 
 	sd_notify(0, "READY=1");
-	signal_setup(pgb_event_base, &main_signal_event, -1);
-	start_threads();
-	pooler_setup();
+	if(multithread_mode)
+		start_threads();
     
 	/* main loop */
 	while (cf_shutdown != SHUTDOWN_IMMEDIATE)

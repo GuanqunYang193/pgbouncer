@@ -16,11 +16,29 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+extern struct StatList user_list;
+extern struct AATree user_tree;
+extern struct StatList pool_list;
+extern struct StatList peer_pool_list;
+extern struct StatList database_list;
 extern struct StatList peer_list;
+extern struct StatList autodatabase_idle_list;
+extern struct StatList login_client_list;
+extern struct Slab *client_cache;
+extern struct Slab *server_cache;
+extern struct Slab *db_cache;
 extern struct Slab *peer_cache;
+extern struct Slab *peer_pool_cache;
+extern struct Slab *pool_cache;
+extern struct Slab *user_cache;
 extern struct Slab *credentials_cache;
+extern struct Slab *iobuf_cache;
+extern struct Slab *outstanding_request_cache;
+extern struct Slab *var_list_cache;
+extern struct Slab *server_prepared_statement_cache;
 extern PgPreparedStatement *prepared_statements;
 
+// FIXME support for multithreads?
 extern unsigned long long int last_pgsocket_id;
 
 PgDatabase *find_peer(int peer_id);
@@ -97,7 +115,9 @@ void for_each_server(PgPool *pool, void (*func)(PgSocket *sk));
 void reuse_just_freed_objects(void);
 
 void init_objects(void);
+void init_objects_multithread(void);
 
 void init_caches(void);
+void init_caches_multithread(void);
 
 void objects_cleanup(void);
