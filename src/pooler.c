@@ -65,7 +65,6 @@ void cleanup_sockets(void)
 	struct ListenSocket *ls;
 	struct List *el;
 
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 
 	/* avoid cleanup if exit() while suspended */
 	if (cf_pause_mode == P_SUSPEND)
@@ -73,7 +72,12 @@ void cleanup_sockets(void)
 	while ((el = statlist_pop(&sock_list)) != NULL) {
 		ls = container_of(el, struct ListenSocket, node);
 		if (event_del(&ls->ev) < 0) {
-			log_warning("[Thread %ld] cleanup_sockets: event_del failed: %s", this_thread->thread_id, strerror(errno));
+			if(multithread_mode){
+				Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+				log_warning("[Thread %ld] cleanup_sockets: event_del failed: %s", this_thread->thread_id, strerror(errno));
+			}else{
+				log_warning("cleanup_sockets, event_del: %s", strerror(errno));
+			}
 		}
 		if (ls->fd > 0) {
 			safe_close(ls->fd);
@@ -331,6 +335,18 @@ static const char *conninfo(const PgSocket *sk)
 	}
 }
 
+void accept_client_handler(bool is_unix, int fd){
+	PgSocket *client;
+	if (is_unix) {
+		client = accept_client(fd, true);
+	} else {
+		client = accept_client(fd, false);
+	}
+
+	if (client)
+		slog_debug(client, "P: got connection: %s", conninfo(client));
+}
+
 /* got new connection, associate it with client struct */
 static void pool_accept(evutil_socket_t sock, short flags, void *arg)
 {
@@ -368,20 +384,23 @@ loop:
 		suspend_pooler();
 		return;
 	}
-
 	log_noise("new fd from accept=%d", fd);
 
-	struct ClientRequest client_request = {fd,is_unix};
-	// FIXME non-block pipe strategy
-	ssize_t n = write(threads[next_thread].pipefd[1], &client_request, sizeof(client_request));
-	if (n <= 0) {
-		log_error("failed to write to pipe");
-		close(fd);
-	}
+	if(multithread_mode){
+		struct ClientRequest client_request = {fd,is_unix};
+		// FIXME non-block pipe strategy
+		ssize_t n = write(threads[next_thread].pipefd[1], &client_request, sizeof(client_request));
+		if (n <= 0) {
+			log_error("failed to write to pipe");
+			close(fd);
+		}
 
-	// TODO optimize this round-robin! 
-	next_thread++;
-	next_thread %= arg_thread_number;
+		// TODO optimize this round-robin! 
+		next_thread++;
+		next_thread %= arg_thread_number;
+	}else{
+		accept_client_handler(is_unix, fd);
+	}
 	/*
 	 * there may be several clients waiting,
 	 * avoid context switch by looping
@@ -396,17 +415,7 @@ void handle_request(evutil_socket_t fd, short event, void* arg){
         return; 
     }
 
-	PgSocket *client;
-
-	if (client_request.is_unix) {
-		client = accept_client(client_request.fd, true);
-	} else {
-		client = accept_client(client_request.fd, false);
-	}
-
-	if (client)
-		slog_debug(client, "P: got connection: %s", conninfo(client));
-
+	accept_client_handler(client_request.is_unix, fd);
 }
 
 
@@ -614,7 +623,6 @@ bool for_each_pooler_fd(pooler_cb cbfunc, void *arg)
 	struct ListenSocket *ls;
 	bool ok;
 
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	statlist_for_each(el, &sock_list) {
 		ls = container_of(el, struct ListenSocket, node);
 		ok = cbfunc(arg, ls->fd, &ls->addr);

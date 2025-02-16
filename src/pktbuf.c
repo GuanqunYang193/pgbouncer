@@ -108,13 +108,18 @@ struct PktBuf *global_pktbuf_temp(void)
 
 struct PktBuf *pktbuf_temp(void)
 {
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-	if (!(this_thread->temp_pktbuf))
-		this_thread->temp_pktbuf = pktbuf_dynamic(512);
-	if (!(this_thread->temp_pktbuf))
+	PktBuf* temp_pktbuf_ = temp_pktbuf;
+	if(multithread_mode){
+		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		temp_pktbuf_ = this_thread->temp_pktbuf;
+	}
+
+	if (!(temp_pktbuf_))
+		temp_pktbuf_ = pktbuf_dynamic(512);
+	if (!(temp_pktbuf_))
 		die("out of memory");
-	pktbuf_reset(this_thread->temp_pktbuf);
-	return this_thread->temp_pktbuf;
+	pktbuf_reset(temp_pktbuf_);
+	return temp_pktbuf_;
 }
 
 void pktbuf_cleanup(void)
@@ -122,8 +127,12 @@ void pktbuf_cleanup(void)
 	pktbuf_free_internal(temp_pktbuf);
 	temp_pktbuf = NULL;
 	bool user_found = true;
-	FOR_EACH_THREAD(thread_id){
-		pktbuf_free_internal(threads[thread_id].temp_pktbuf);
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			pktbuf_free_internal(threads[thread_id].temp_pktbuf);
+		}
+	}else{
+		pktbuf_free_internal(temp_pktbuf);
 	}
 }
 
@@ -167,7 +176,10 @@ static void pktbuf_send_func(evutil_socket_t fd, short flags, void *arg)
 	buf->send_pos += res;
 
 	if (buf->send_pos < buf->write_pos) {
-		struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
+
+		struct event_base * base = pgb_event_base;
+		if(multithread_mode)
+			base = (struct event_base *)pthread_getspecific(event_base_key);
 		event_assign(buf->ev, base, fd, EV_WRITE, pktbuf_send_func, buf);
 		res = event_add(buf->ev, NULL);
 		if (res < 0) {

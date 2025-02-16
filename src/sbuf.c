@@ -185,7 +185,9 @@ bool sbuf_connect(SBuf *sbuf, const struct sockaddr *sa, socklen_t sa_len, time_
 		return true;
 	} else if (errno == EINPROGRESS || errno == EAGAIN) {
 		/* tcp socket needs waiting */
-		struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
+		struct event_base * base = pgb_event_base;
+		if(multithread_mode)
+			base = (struct event_base *)pthread_getspecific(event_base_key);
 		event_assign(&sbuf->ev, base, sock, EV_WRITE, sbuf_connect_cb, sbuf);
 		res = event_add(&sbuf->ev, &timeout);
 		if (res >= 0) {
@@ -258,7 +260,9 @@ bool sbuf_continue_with_callback(SBuf *sbuf, event_callback_fn user_cb)
 	int err;
 
 	AssertActive(sbuf);
-	struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
+	struct event_base * base = pgb_event_base;
+	if(multithread_mode)
+		base = (struct event_base *)pthread_getspecific(event_base_key);
 	event_assign(&sbuf->ev, base, sbuf->sock, EV_READ | EV_PERSIST,
 		     user_cb, sbuf);
 
@@ -286,7 +290,9 @@ bool sbuf_use_callback_once(SBuf *sbuf, short ev, event_callback_fn user_cb)
 	}
 
 	/* setup one one-off event handler */
-	struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
+	struct event_base * base = pgb_event_base;
+	if(multithread_mode)
+		base = (struct event_base *)pthread_getspecific(event_base_key);
 	event_assign(&sbuf->ev, base, sbuf->sock, ev, user_cb, sbuf);
 	err = event_add(&sbuf->ev, NULL);
 	if (err < 0) {
@@ -320,8 +326,12 @@ bool sbuf_close(SBuf *sbuf)
 	sbuf->pkt_remain = 0;
 	sbuf->pkt_action = sbuf->wait_type = 0;
 	if (sbuf->io) {
-		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		slab_free(this_thread->iobuf_cache, sbuf->io);
+		struct Slab *iobuf_cache_ = iobuf_cache;
+		if(multithread_mode){
+			Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+			iobuf_cache_ = iobuf_cache;
+		}
+		slab_free(iobuf_cache_, sbuf->io);
 		sbuf->io = NULL;
 	}
 	mbuf_free(&sbuf->extra_packets);
@@ -511,7 +521,9 @@ static bool sbuf_call_proto(SBuf *sbuf, int event)
 static bool sbuf_wait_for_data(SBuf *sbuf)
 {
 	int err;
-	struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
+	struct event_base * base = pgb_event_base;
+	if(multithread_mode)
+		base = (struct event_base *)pthread_getspecific(event_base_key);
 	event_assign(&sbuf->ev, base, sbuf->sock, EV_READ | EV_PERSIST, sbuf_recv_cb, sbuf);
 	err = event_add(&sbuf->ev, NULL);
 	if (err < 0) {
@@ -547,7 +559,9 @@ static bool sbuf_wait_for_data_forced(SBuf *sbuf)
 		event_del(&sbuf->ev);
 		sbuf->wait_type = W_NONE;
 	}
-	struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
+	struct event_base * base = pgb_event_base;
+	if(multithread_mode)
+		base = (struct event_base *)pthread_getspecific(event_base_key);
 	event_assign(&sbuf->ev, base, sbuf->sock, EV_READ, sbuf_recv_forced_cb, sbuf);
 	err = event_add(&sbuf->ev, &tv_min);
 	if (err < 0) {
@@ -603,7 +617,9 @@ static bool sbuf_queue_send(SBuf *sbuf)
 	}
 
 	/* instead wait for EV_WRITE on destination socket */
-	struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
+	struct event_base * base = pgb_event_base;
+	if(multithread_mode)
+		base = (struct event_base *)pthread_getspecific(event_base_key);
 	event_assign(&sbuf->ev, base, sbuf->dst->sock, EV_WRITE, sbuf_send_cb, sbuf);
 	err = event_add(&sbuf->ev, NULL);
 	if (err < 0) {
@@ -908,8 +924,12 @@ static void sbuf_try_resync(SBuf *sbuf, bool release)
 		return;
 
 	if (release && iobuf_empty(io)) {
-		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		slab_free(this_thread->iobuf_cache, io);
+		struct Slab *iobuf_cache_ = iobuf_cache;
+		if(multithread_mode){
+			Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+			iobuf_cache_ = this_thread->iobuf_cache;
+		}
+		slab_free(iobuf_cache_, io);
 		sbuf->io = NULL;
 	} else {
 		iobuf_try_resync(io, SBUF_SMALL_PKT);
@@ -950,8 +970,12 @@ static void sbuf_recv_cb(evutil_socket_t sock, short flags, void *arg)
 static bool allocate_iobuf(SBuf *sbuf)
 {
 	if (sbuf->io == NULL) {
-		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		sbuf->io = slab_alloc(this_thread->iobuf_cache);
+		struct Slab *iobuf_cache_ = iobuf_cache;
+		if(multithread_mode){
+			Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+			iobuf_cache_ = this_thread->iobuf_cache;
+		}
+		sbuf->io = slab_alloc(iobuf_cache_);
 		if (sbuf->io == NULL) {
 			sbuf_call_proto(sbuf, SBUF_EV_RECV_FAILED);
 			return false;
@@ -1347,8 +1371,15 @@ bool sbuf_tls_setup(void)
 	if ((server_connect_conf || new_server_connect_conf) && tls_change_requires_reconnect(new_server_connect_conf)) {
 		struct List *item;
 		PgPool *pool;
-		FOR_EACH_THREAD(thread_id){
-			statlist_for_each(item, &(threads[thread_id].pool_list)) {
+		if(multithread_mode){
+			FOR_EACH_THREAD(thread_id){
+				statlist_for_each(item, &(threads[thread_id].pool_list)) {
+					pool = container_of(item, PgPool, head);
+					tag_pool_dirty(pool);
+				}
+			}
+		}else{
+			statlist_for_each(item, &pool_list) {
 				pool = container_of(item, PgPool, head);
 				tag_pool_dirty(pool);
 			}

@@ -32,7 +32,11 @@ static bool load_parameter(PgSocket *server, PktHdr *pkt, bool startup)
 {
 	const char *key, *val;
 	PgSocket *client = server->link;
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	int thread_id = -1;
+	if(multithread_mode){
+		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		thread_id = this_thread->thread_id;
+	}
 
 	/*
 	 * Want to see complete packet.  That means SMALL_PKT
@@ -47,15 +51,15 @@ static bool load_parameter(PgSocket *server, PktHdr *pkt, bool startup)
 		goto failed;
 	slog_debug(server, "S: param: %s = %s", key, val);
 
-	varcache_set(&server->vars, key, val, this_thread->thread_id);
+	varcache_set(&server->vars, key, val, thread_id);
 
 	if (client) {
 		slog_debug(client, "setting client var: %s='%s'", key, val);
-		varcache_set(&client->vars, key, val, this_thread->thread_id);
+		varcache_set(&client->vars, key, val, thread_id);
 	}
 
 	if (startup) {
-		if (!add_welcome_parameter(server->pool, key, val, this_thread->thread_id))
+		if (!add_welcome_parameter(server->pool, key, val, thread_id))
 			goto failed_store;
 	}
 
@@ -367,7 +371,11 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 	bool ignore_packet = false;
 
 	Assert(!server->pool->db->admin);
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	struct Slab *outstanding_request_cache_ = outstanding_request_cache;
+	if(multithread_mode){
+		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		outstanding_request_cache_ = this_thread->outstanding_request_cache;
+	}
 
 	switch (pkt->type) {
 	default:
@@ -631,7 +639,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 					disconnect_server(client->link, true, "out of memory");
 					return false;
 				}
-				slab_free(this_thread->outstanding_request_cache, request);
+				slab_free(outstanding_request_cache_, request);
 			}
 		}
 	} else {

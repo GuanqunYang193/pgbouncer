@@ -406,8 +406,19 @@ static void set_dbs_dead(bool flag)
 {
 	struct List *item;
 	PgDatabase *db;
-	FOR_EACH_THREAD(thread_id){
-		statlist_for_each(item, &(threads[thread_id].database_list)) {
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			statlist_for_each(item, &(threads[thread_id].database_list)) {
+				db = container_of(item, PgDatabase, head);
+				if (db->admin)
+					continue;
+				if (db->db_auto)
+					continue;
+				db->db_dead = flag;
+			}
+		}
+	}else{
+		statlist_for_each(item, &database_list) {
 			db = container_of(item, PgDatabase, head);
 			if (db->admin)
 				continue;
@@ -630,9 +641,14 @@ static void check_limits(void)
 {
 	struct rlimit lim;
 	int total_users = 0;
-	FOR_EACH_THREAD(thread_id){
-	 	statlist_count(&(threads[thread_id].user_list));
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			total_users += statlist_count(&(threads[thread_id].user_list));
+		}
+	}else{
+		total_users = statlist_count(&user_list);
 	}
+
 	int fd_count;
 	int err;
 	struct List *item;
@@ -651,8 +667,18 @@ static void check_limits(void)
 
 	/* calculate theoretical max, +10 is just in case */
 	fd_count = cf_max_client_conn + 10;
-	FOR_EACH_THREAD(thread_id){
-		statlist_for_each(item, &(threads[thread_id].database_list)) {
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			statlist_for_each(item, &(threads[thread_id].database_list)) {
+				db = container_of(item, PgDatabase, head);
+				if (db->forced_user_credentials)
+					fd_count += (db->pool_size >= 0 ? db->pool_size : cf_default_pool_size);
+				else
+					fd_count += (db->pool_size >= 0 ? db->pool_size : cf_default_pool_size) * total_users;
+			}
+		}
+	}else{
+		statlist_for_each(item, &database_list) {
 			db = container_of(item, PgDatabase, head);
 			if (db->forced_user_credentials)
 				fd_count += (db->pool_size >= 0 ? db->pool_size : cf_default_pool_size);
@@ -925,7 +951,6 @@ int main(int argc, char *argv[])
 	init_var_lookup(cf_track_extra_parameters);
 	init_caches();
 	logging_prefix_cb = log_socket_prefix;
-
 	if (!sbuf_tls_setup())
 		die("TLS setup failed");
 
@@ -942,7 +967,6 @@ int main(int argc, char *argv[])
 	/* disallow running as root */
 	if (getuid() == 0)
 		die("PgBouncer should not run as root");
-
 	admin_setup();
 
 	if (cf_reboot) {
@@ -983,7 +1007,6 @@ int main(int argc, char *argv[])
 	stats_setup();
 
 	pam_init();
-
 	if (did_takeover) {
 		takeover_finish();
 	} else {

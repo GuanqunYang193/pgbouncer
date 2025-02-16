@@ -68,6 +68,7 @@ static regex_t rc_cmd;
 static regex_t rc_set_word;
 static regex_t rc_set_str;
 
+// TODO admin_pool multithread support
 static PgPool *admin_pool;
 
 /* only valid during processing */

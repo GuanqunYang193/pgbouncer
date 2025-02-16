@@ -563,9 +563,14 @@ bool parse_user(void *base, const char *name, const char *connstr)
 		}
 	}
 
-	FOR_EACH_THREAD(thread_id){
-		user = find_or_add_new_global_user(name, "", thread_id);
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			user = find_or_add_new_global_user(name, "", thread_id);
+		}
+	}else{
+		user = find_or_add_new_global_user(name, "", -1);
 	}
+
 	if (!user) {
 		log_error("cannot create user, no memory?");
 		goto fail;
@@ -682,8 +687,16 @@ bool loader_users_check(void)
 static void disable_users(void)
 {
 	struct List *item;
-	FOR_EACH_THREAD(thread_id){
-		statlist_for_each(item, &(threads[thread_id].user_list)) {
+	if (multithread_mode)
+	{
+		FOR_EACH_THREAD(thread_id){
+			statlist_for_each(item, &(threads[thread_id].user_list)) {
+				PgGlobalUser *user = container_of(item, PgGlobalUser, head);
+				user->credentials.passwd[0] = 0;
+			}
+		}
+	}else{
+		statlist_for_each(item, &user_list) {
 			PgGlobalUser *user = container_of(item, PgGlobalUser, head);
 			user->credentials.passwd[0] = 0;
 		}
@@ -755,8 +768,12 @@ bool load_auth_file(const char *fn)
 		*p++ = 0;	/* tag password end */
 
 		/* send them away */
-		FOR_EACH_THREAD(thread_id){
-			unquote_add_authfile_user(user, password, thread_id);
+		if(multithread_mode){
+			FOR_EACH_THREAD(thread_id){
+				unquote_add_authfile_user(user, password, thread_id);
+			}
+		}else{
+			unquote_add_authfile_user(user, password, -1);
 		}
 		/* skip rest of the line */
 		while (*p && *p != '\n') p++;
