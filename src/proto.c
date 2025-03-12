@@ -327,11 +327,7 @@ static PgCredentials *get_srv_psw(PgSocket *server)
 {
 	PgDatabase *db = server->pool->db;
 	PgCredentials *credentials = server->pool->user_credentials;
-	int thread_id = -1;
-	if(multithread_mode){
-		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		thread_id = this_thread->thread_id;
-	}
+	int thread_id = get_current_thread_id(multithread_mode);
 
 	/* if forced user without password, use userlist psw */
 	if (!credentials->passwd[0] && db->forced_user_credentials) {

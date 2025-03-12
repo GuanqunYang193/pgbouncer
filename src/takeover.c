@@ -144,11 +144,7 @@ static void takeover_load_fd(struct MBuf *pkt, const struct cmsghdr *cmsg)
 		if (!pga_pton(&addr, saddr, port))
 			fatal("failed to convert address: %s", saddr);
 	}
-	int thread_id = -1;
-	if(multithread_mode){
-		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		thread_id = this_thread->thread_id;
-	}
+	int thread_id = get_current_thread_id(multithread_mode);
 	/* decide what to do with it */
 	if (strcmp(task, "client") == 0) {
 		res = use_client_socket(fd, &addr, db, user, ckey, oldfd, linkfd,

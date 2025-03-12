@@ -8,7 +8,7 @@
 
 #define FOR_EACH_THREAD(id)         \
 	for (int id = 0;                \
-	     (id) < arg_thread_number;   \
+	     (id) < arg_thread_number;  \
 	     (id)++)                    
 
 typedef struct SignalEvent{
@@ -95,3 +95,4 @@ void start_threads();
 void init_threads();
 int wait_threads();
 void clean_threads();
+int get_current_thread_id(const bool multithread_mode);

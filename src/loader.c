@@ -244,12 +244,18 @@ fail:
 	free(host);
 	return false;
 }
+
 bool parse_database_multithread(void *base, const char *name, const char *connstr){
-	FOR_EACH_THREAD(thread_id){
-		parse_database(base, name, connstr, thread_id);
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			parse_database(base, name, connstr, thread_id);
+		}
+	}else{
+		parse_database(base, name, connstr, -1);
 	}
 	return true;
 }
+
 /* fill PgDatabase from connstr */
 bool parse_database(void *base, const char *name, const char *connstr, int thread_id)
 {

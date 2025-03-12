@@ -1990,11 +1990,7 @@ void admin_setup(void)
 	int res;
 
 	/* fake database */
-	int thread_id = -1;
-	if(multithread_mode){
-		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		thread_id = this_thread->thread_id;
-	}
+	int thread_id = get_current_thread_id(multithread_mode);
 	db = add_database("pgbouncer", thread_id);
 	if (!db)
 		die("no memory for admin database");

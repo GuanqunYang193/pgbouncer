@@ -73,8 +73,7 @@ void cleanup_sockets(void)
 		ls = container_of(el, struct ListenSocket, node);
 		if (event_del(&ls->ev) < 0) {
 			if(multithread_mode){
-				Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-				log_warning("[Thread %ld] cleanup_sockets: event_del failed: %s", this_thread->thread_id, strerror(errno));
+				log_warning("[Thread %ld] cleanup_sockets: event_del failed: %s", get_current_thread_id(multithread_mode), strerror(errno));
 			}else{
 				log_warning("cleanup_sockets, event_del: %s", strerror(errno));
 			}
@@ -385,9 +384,9 @@ loop:
 		return;
 	}
 	log_noise("new fd from accept=%d", fd);
+	struct ClientRequest client_request = {fd,is_unix};
 
 	if(multithread_mode){
-		struct ClientRequest client_request = {fd,is_unix};
 		// FIXME non-block pipe strategy
 		ssize_t n = write(threads[next_thread].pipefd[1], &client_request, sizeof(client_request));
 		if (n <= 0) {
@@ -414,8 +413,7 @@ void handle_request(evutil_socket_t fd, short event, void* arg){
     if (client_request.fd < 0) {
         return; 
     }
-
-	accept_client_handler(client_request.is_unix, fd);
+	accept_client_handler(client_request.is_unix, client_request.fd);
 }
 
 

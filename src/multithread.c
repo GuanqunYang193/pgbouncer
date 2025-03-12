@@ -210,11 +210,11 @@ void* worker_func(void* arg){
 
     pthread_setspecific(event_base_key, base);
 
-	admin_setup();
+	// admin_setup();
     thread_pooler_setup();
 	signal_setup(base, &(this_thread->signal_event), this_thread->thread_id);
 	janitor_setup();
-	stats_setup();
+	// stats_setup();
 
     while(this_thread->cf_shutdown != SHUTDOWN_IMMEDIATE){
         int err;
@@ -271,7 +271,7 @@ void start_threads(){
 void init_threads(){
 	if(arg_thread_number < 1)
 		return;
-	log_error("allocate %d number of thread", arg_thread_number);
+	log_info("allocating %d threads.", arg_thread_number);
 	threads = calloc(arg_thread_number, sizeof(Thread));
 	FOR_EACH_THREAD(thread_id){	
 		init_thread(thread_id);
@@ -297,4 +297,12 @@ int wait_threads(){
 		free(retval); 
 	}
 	return 0;
+}
+
+inline int get_current_thread_id(const bool multithread_mode){
+    if(!multithread_mode){
+		return -1;
+	}                                          
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	return this_thread->thread_id;      
 }

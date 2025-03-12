@@ -311,11 +311,17 @@ void init_caches_multithread(void)
 /* free all memory related to the given client */
 static void client_free(PgSocket *client)
 {
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	struct Slab * var_list_cache_ = var_list_cache;
+	struct Slab * client_cache_ = client_cache;
+	if(multithread_mode){
+		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		var_list_cache_ = this_thread->var_list_cache;
+		client_cache_ = this_thread->client_cache;
+	}
 	free_client_prepared_statements(client);
 	varcache_clean(&client->vars);
-	slab_free(this_thread->var_list_cache, client->vars.var_list);
-	slab_free(this_thread->client_cache, client);
+	slab_free(var_list_cache_, client->vars.var_list);
+	slab_free(client_cache_, client);
 }
 
 /* free all memory related to the given server */
@@ -323,19 +329,27 @@ static void server_free(PgSocket *server)
 {
 	struct List *el, *tmp_l;
 	OutstandingRequest *request;
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	struct Slab *outstanding_request_cache_ = outstanding_request_cache;
+	struct Slab *var_list_cache_ = var_list_cache;
+	struct Slab *server_cache_ = server_cache;
+	if(multithread_mode){
+		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		outstanding_request_cache_ = this_thread->outstanding_request_cache;
+		var_list_cache_ = this_thread->var_list_cache;
+		server_cache_ = this_thread->server_cache;
+	}
 	statlist_for_each_safe(el, &server->outstanding_requests, tmp_l) {
 		request = container_of(el, OutstandingRequest, node);
 		statlist_remove(&server->canceling_clients, el);
 		if (request->server_ps)
 			free_server_prepared_statement(request->server_ps);
-		slab_free(this_thread->outstanding_request_cache, request);
+		slab_free(outstanding_request_cache_, request);
 	}
 
 	free_server_prepared_statements(server);
 	varcache_clean(&server->vars);
-	slab_free(this_thread->var_list_cache, server->vars.var_list);
-	slab_free(this_thread->server_cache, server);
+	slab_free(var_list_cache_, server->vars.var_list);
+	slab_free(server_cache_, server);
 }
 
 
@@ -343,18 +357,24 @@ static void server_free(PgSocket *server)
 void change_client_state(PgSocket *client, SocketState newstate)
 {
 	PgPool *pool = client->pool;
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	struct StatList* justfree_client_list_ptr = &justfree_client_list;
+	struct StatList* login_client_list_ptr = &login_client_list;
+	if(multithread_mode){
+		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		justfree_client_list_ptr = &(this_thread->justfree_client_list);
+		login_client_list_ptr = &(this_thread->login_client_list);
+	}
 	/* remove from old location */
 	switch (client->state) {
 	case CL_FREE:
 		break;
 	case CL_JUSTFREE:
-		statlist_remove(&(this_thread->justfree_client_list), &client->head);
+		statlist_remove(justfree_client_list_ptr, &client->head);
 		break;
 	case CL_LOGIN:
 		if (newstate == CL_WAITING)
 			newstate = CL_WAITING_LOGIN;
-		statlist_remove(&(this_thread->login_client_list), &client->head);
+		statlist_remove(login_client_list_ptr, &client->head);
 		break;
 	case CL_WAITING_LOGIN:
 		if (newstate == CL_ACTIVE)
@@ -384,10 +404,10 @@ void change_client_state(PgSocket *client, SocketState newstate)
 		client_free(client);
 		break;
 	case CL_JUSTFREE:
-		statlist_append(&(this_thread->justfree_client_list), &client->head);
+		statlist_append(justfree_client_list_ptr, &client->head);
 		break;
 	case CL_LOGIN:
-		statlist_append(&(this_thread->login_client_list), &client->head);
+		statlist_append(login_client_list_ptr, &client->head);
 		break;
 	case CL_WAITING:
 	case CL_WAITING_LOGIN:
@@ -413,13 +433,17 @@ void change_server_state(PgSocket *server, SocketState newstate)
 {
 	PgPool *pool = server->pool;
 
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	struct StatList* justfree_server_list_ptr = &justfree_server_list;
+	if(multithread_mode){
+		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		justfree_server_list_ptr = &(this_thread->justfree_client_list);
+	}
 	/* remove from old location */
 	switch (server->state) {
 	case SV_FREE:
 		break;
 	case SV_JUSTFREE:
-		statlist_remove(&(this_thread->justfree_server_list), &server->head);
+		statlist_remove(justfree_server_list_ptr, &server->head);
 		break;
 	case SV_LOGIN:
 		statlist_remove(&pool->new_server_list, &server->head);
@@ -454,7 +478,7 @@ void change_server_state(PgSocket *server, SocketState newstate)
 		server_free(server);
 		break;
 	case SV_JUSTFREE:
-		statlist_append(&(this_thread->justfree_server_list), &server->head);
+		statlist_append(justfree_server_list_ptr, &server->head);
 		break;
 	case SV_LOGIN:
 		statlist_append(&pool->new_server_list, &server->head);
@@ -590,7 +614,7 @@ PgDatabase *add_database(const char *name, int thread_id)
 	if (db == NULL) {
 		struct Slab* db_cache_ = db_cache;
 		struct StatList* database_list_ = &database_list;
-		if(multithread_mode && thread_id != -1){
+		if(thread_id != -1){
 			db_cache_ = threads[thread_id].db_cache;
 			database_list_ = &(threads[thread_id].database_list);
 		}
@@ -645,7 +669,7 @@ static PgGlobalUser *add_new_global_user(const char *name, const char *passwd, i
 	struct StatList* user_list_ptr = &user_list;
 	struct AATree* user_tree_ptr = &user_tree;
 	struct Slab * user_cache_ = user_cache;
-	if(!multithread_mode && thread_id != -1){
+	if(thread_id != -1){
 		user_list_ptr = &(threads[thread_id].user_list);
 		user_tree_ptr = &(threads[thread_id].user_tree);
 		user_cache_ = threads[thread_id].user_cache;
@@ -899,15 +923,22 @@ static PgPool *new_pool(PgDatabase *db, PgCredentials *user_credentials)
 static PgPool *new_peer_pool(PgDatabase *db)
 {
 	PgPool *pool;
-
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-	pool = slab_alloc(this_thread->peer_pool_cache);
+	struct Slab *peer_pool_cache_ = peer_pool_cache;
+	struct Slab *var_list_cache_ = var_list_cache;
+	struct StatList* peer_pool_list_ptr = &peer_pool_list;
+	if(multithread_mode){
+		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		peer_pool_cache_ = this_thread->peer_pool_cache;
+		var_list_cache_ = this_thread->var_list_cache;
+		peer_pool_list_ptr = &this_thread->peer_pool_list;
+	}
+	pool = slab_alloc(peer_pool_cache_);
 	if (!pool)
 		return NULL;
 
 	list_init(&pool->head);
 	list_init(&pool->map_head);
-	pool->orig_vars.var_list = slab_alloc(this_thread->var_list_cache);
+	pool->orig_vars.var_list = slab_alloc(var_list_cache_);
 
 	pool->db = db;
 
@@ -917,7 +948,7 @@ static PgPool *new_peer_pool(PgDatabase *db)
 	statlist_init(&pool->active_cancel_server_list, "active_cancel_server_list");
 
 	/* keep pools in peer_id order to make stats faster */
-	put_in_order(&pool->head, &(this_thread->peer_pool_list), cmp_peer_pool);
+	put_in_order(&pool->head, peer_pool_list_ptr, cmp_peer_pool);
 	
 	return pool;
 }
@@ -1652,8 +1683,7 @@ void disconnect_client_sqlstate(PgSocket *client, bool notify, const char *sqlst
 
 	if (cf_log_disconnections && reason) {
 		if(multithread_mode){
-			Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-			slog_info(client, "[Thread %d] closing because: %s (age=%" PRIu64 "s)", this_thread->thread_id, reason,
+			slog_info(client, "[Thread %d] closing because: %s (age=%" PRIu64 "s)", get_current_thread_id(multithread_mode), reason,
 				(now - client->connect_time) / USEC);
 		}else{
 			slog_info(client, "closing because: %s (age=%" PRIu64 "s)", reason,
@@ -1781,7 +1811,6 @@ void disconnect_client_sqlstate(PgSocket *client, bool notify, const char *sqlst
 
 	free(client->startup_options);
 	client->startup_options = NULL;
-
 	change_client_state(client, CL_JUSTFREE);
 	if (!sbuf_close(&client->sbuf))
 		log_noise("sbuf_close failed, retry later");
@@ -2631,7 +2660,7 @@ bool use_server_socket(int fd, PgAddr *addr,
 		return false;
 
 	struct Slab *server_cache_ = server_cache;
-	if(multithread_mode && thread_id != -1)
+	if(thread_id != -1)
 		server_cache_ = threads[thread_id].server_cache;
 
 	server = slab_alloc(server_cache_);

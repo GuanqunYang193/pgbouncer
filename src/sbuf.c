@@ -329,7 +329,7 @@ bool sbuf_close(SBuf *sbuf)
 		struct Slab *iobuf_cache_ = iobuf_cache;
 		if(multithread_mode){
 			Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-			iobuf_cache_ = iobuf_cache;
+			iobuf_cache_ = this_thread->iobuf_cache;
 		}
 		slab_free(iobuf_cache_, sbuf->io);
 		sbuf->io = NULL;

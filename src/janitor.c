@@ -911,7 +911,7 @@ void kill_pool(PgPool *pool, int thread_id)
 	pktbuf_free(pool->welcome_msg);
 
 	list_del(&pool->map_head);
-	if(multithread_mode && thread_id != -1){
+	if(thread_id != -1){
 		statlist_remove(&threads[thread_id].pool_list, &pool->head);
 		varcache_clean(&pool->orig_vars);
 		slab_free(&threads[thread_id].var_list_cache, pool->orig_vars.var_list);
@@ -936,7 +936,7 @@ void kill_peer_pool(PgPool *pool, int thread_id)
 	pktbuf_free(pool->welcome_msg);
 
 	list_del(&pool->map_head);
-	if(multithread_mode && thread_id != -1){
+	if(thread_id != -1){
 		statlist_remove(&threads[thread_id].peer_pool_list, &pool->head);
 		varcache_clean(&pool->orig_vars);
 		slab_free(&threads[thread_id].var_list_cache, pool->orig_vars.var_list);
@@ -964,7 +964,7 @@ void kill_database(PgDatabase *db, int thread_id)
 	}
 	log_warning("dropping database '%s' as it does not exist anymore or inactive auto-database", db->name);
 
-	if(multithread_mode && thread_id != -1){
+	if(thread_id != -1){
 		statlist_for_each_safe(item, &(threads[thread_id].pool_list), tmp) {
 			pool = container_of(item, PgPool, head);
 			if (pool->db == db)

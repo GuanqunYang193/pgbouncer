@@ -32,11 +32,7 @@ static bool load_parameter(PgSocket *server, PktHdr *pkt, bool startup)
 {
 	const char *key, *val;
 	PgSocket *client = server->link;
-	int thread_id = -1;
-	if(multithread_mode){
-		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		thread_id = this_thread->thread_id;
-	}
+	int thread_id = get_current_thread_id(multithread_mode);
 
 	/*
 	 * Want to see complete packet.  That means SMALL_PKT
