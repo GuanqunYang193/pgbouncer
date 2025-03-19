@@ -967,7 +967,10 @@ int main(int argc, char *argv[])
 	/* disallow running as root */
 	if (getuid() == 0)
 		die("PgBouncer should not run as root");
-	//admin_setup();
+	
+	if(!multithread_mode){
+		admin_setup();
+	}
 
 	if (cf_reboot) {
 		log_warning("Online restart is deprecated, use so_reuseport instead");
@@ -1003,8 +1006,10 @@ int main(int argc, char *argv[])
 		die("event_base_new() failed");
     dns_setup();
 	signal_setup(pgb_event_base, &main_signal_event, -1);
-	janitor_setup();
-	// stats_setup();
+	if(!multithread_mode){
+		janitor_setup();
+		stats_setup();
+	}
 	pam_init();
 	if (did_takeover) {
 		takeover_finish();

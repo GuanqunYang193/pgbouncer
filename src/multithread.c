@@ -214,7 +214,7 @@ void* worker_func(void* arg){
     thread_pooler_setup();
 	signal_setup(base, &(this_thread->signal_event), this_thread->thread_id);
 	janitor_setup();
-	// stats_setup();
+	stats_setup();
 
     while(this_thread->cf_shutdown != SHUTDOWN_IMMEDIATE){
         int err;
