@@ -765,8 +765,8 @@ static void takeover_part1(void)
 		die("cannot reboot under service manager");
 
 	takeover_init();
-	// while (cf_reboot)
-	// 	main_loop_once();
+	while (cf_reboot)
+		main_loop_once();
 
 	event_base_free(pgb_event_base);
 	pgb_event_base = evtmp;
@@ -974,6 +974,9 @@ int main(int argc, char *argv[])
 
 	if (cf_reboot) {
 		log_warning("Online restart is deprecated, use so_reuseport instead");
+		if(multithread_mode){
+			die("Multithread mode doean't support reboot.");
+		}
 		if (check_old_process_unix()) {
 			takeover_part1();
 			did_takeover = true;
