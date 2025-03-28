@@ -4,6 +4,8 @@
 
 int next_thread = 0;
 bool multithread_mode = false;
+pthread_key_t event_base_key;
+pthread_key_t thread_pointer;
 
 void handle_sigterm_main(evutil_socket_t sock, short flags, void *arg)
 {

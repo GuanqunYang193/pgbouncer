@@ -911,6 +911,6 @@ bool set_config_param(const char *key, const char *val);
 void config_for_each(void (*param_cb)(void *arg, const char *name, const char *val, const char *defval, bool reloadable),
 		     void *arg);
 
-pthread_key_t event_base_key;
-pthread_key_t thread_pointer;
+extern pthread_key_t event_base_key;
+extern pthread_key_t thread_pointer;
 
