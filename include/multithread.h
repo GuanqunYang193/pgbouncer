@@ -87,7 +87,7 @@ typedef struct ClientRequest {
     bool is_unix;
 } ClientRequest;
 
-Thread *threads;
+extern Thread *threads;
 extern int next_thread;
 
 void signal_setup(struct event_base * base, struct SignalEvent* signal_event, int thread_id);
