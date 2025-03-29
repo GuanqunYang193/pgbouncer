@@ -201,6 +201,25 @@ static void takeover_clean_socket_list(struct StatList *list)
 	}
 }
 
+static void takeover_postprocess_fds_create_link_cb(struct List *item, void *ctx) {
+	struct List *item2;
+	PgPool *pool = container_of(item, PgPool, head);
+	if (pool->db->admin)
+		return;
+	statlist_for_each(item2, &pool->active_client_list) {
+		PgSocket *client = container_of(item2, PgSocket, head);
+		if (client->suspended && client->tmp_sk_linkfd)
+			takeover_create_link(pool, client);
+	}
+}
+
+static void takeover_postprocess_fds_clean_socket_list_cb(struct List *item, void *ctx) {
+	PgPool *pool = container_of(item, PgPool, head);
+	takeover_clean_socket_list(&pool->active_client_list);
+	takeover_clean_socket_list(&pool->active_server_list);
+	takeover_clean_socket_list(&pool->idle_server_list);
+}
+
 /* all fds loaded, create links */
 static void takeover_postprocess_fds(void)
 {
@@ -209,22 +228,8 @@ static void takeover_postprocess_fds(void)
 	PgPool *pool;
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
-			statlist_for_each(item, &(threads[thread_id].pool_list)) {
-				pool = container_of(item, PgPool, head);
-				if (pool->db->admin)
-					continue;
-				statlist_for_each(item2, &pool->active_client_list) {
-					client = container_of(item2, PgSocket, head);
-					if (client->suspended && client->tmp_sk_linkfd)
-						takeover_create_link(pool, client);
-				}
-			}
-			statlist_for_each(item, &(threads[thread_id].pool_list)) {
-				pool = container_of(item, PgPool, head);
-				takeover_clean_socket_list(&pool->active_client_list);
-				takeover_clean_socket_list(&pool->active_server_list);
-				takeover_clean_socket_list(&pool->idle_server_list);
-			}
+			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), takeover_postprocess_fds_create_link_cb, NULL);
+			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), takeover_postprocess_fds_clean_socket_list_cb, NULL);
 		}
 	}else{
 		statlist_for_each(item, &pool_list) {

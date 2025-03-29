@@ -1,4 +1,5 @@
 #include <usual/statlist.h>
+#include <usual/statlist_ts.h>
 #include <usual/aatree.h>
 
 #include <pthread.h>
@@ -39,10 +40,10 @@ typedef struct Thread {
     struct event ev_handle_request;
     int pipefd[2];
     struct StatList login_client_list;
-    struct StatList pool_list;
+    struct ThreadSafeStatList pool_list;
     struct StatList peer_pool_list;
     struct SignalEvent signal_event;
-    struct StatList database_list;
+    struct ThreadSafeStatList database_list;
     struct StatList autodatabase_idle_list;
     struct StatList user_list;
     struct Slab *client_cache;
