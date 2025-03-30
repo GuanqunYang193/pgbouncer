@@ -49,10 +49,10 @@ typedef struct Thread {
     struct Slab *client_cache;
     struct Slab *user_cache;
     struct Slab *server_cache;
-    struct Slab *pool_cache;
+    struct ThreadSafeSlab *pool_cache;
     struct Slab *peer_pool_cache;
-    struct Slab *db_cache;
-    struct Slab *var_list_cache;
+    struct ThreadSafeSlab *db_cache;
+    struct ThreadSafeSlab *var_list_cache;
     struct Slab *iobuf_cache;
     struct Slab *server_prepared_statement_cache;
     struct Slab *outstanding_request_cache;

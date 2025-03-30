@@ -983,10 +983,10 @@ void kill_pool(PgPool *pool, int thread_id)
 
 	list_del(&pool->map_head);
 	if(thread_id != -1){
-		statlist_remove(&threads[thread_id].pool_list, &pool->head);
+		thread_safe_statlist_remove(&(threads[thread_id].pool_list), &pool->head);
 		varcache_clean(&pool->orig_vars);
-		slab_free(&threads[thread_id].var_list_cache, pool->orig_vars.var_list);
-		slab_free(&threads[thread_id].pool_cache, pool);
+		thread_safe_slab_free(&threads[thread_id].var_list_cache, pool->orig_vars.var_list);
+		thread_safe_slab_free(&threads[thread_id].pool_cache, pool);
 	}else{
 		statlist_remove(&pool_list, &pool->head);
 		varcache_clean(&pool->orig_vars);
@@ -1008,10 +1008,10 @@ void kill_peer_pool(PgPool *pool, int thread_id)
 
 	list_del(&pool->map_head);
 	if(thread_id != -1){
-		statlist_remove(&threads[thread_id].peer_pool_list, &pool->head);
+		thread_safe_statlist_remove(&(threads[thread_id].peer_pool_list), &pool->head);
 		varcache_clean(&pool->orig_vars);
-		slab_free(&threads[thread_id].var_list_cache, pool->orig_vars.var_list);
-		slab_free(&threads[thread_id].pool_cache, pool);
+		thread_safe_slab_free(&threads[thread_id].var_list_cache, pool->orig_vars.var_list);
+		thread_safe_slab_free(&threads[thread_id].pool_cache, pool);
 	}else{
 		statlist_remove(&peer_pool_list, &pool->head);
 		varcache_clean(&pool->orig_vars);

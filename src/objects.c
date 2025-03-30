@@ -27,6 +27,7 @@
 #include <usual/err.h>
 #include <usual/safeio.h>
 #include <usual/slab.h>
+#include <usual/slab_ts.h>
 
 #define MAX_SLAB_NAME 64
 
@@ -139,12 +140,16 @@ static void construct_client(void *obj)
 	list_init(&client->head);
 	sbuf_init(&client->sbuf, client_proto);
 
-	struct Slab *var_list_cache_ = var_list_cache;
+	struct Slab *var_list_cache_;
+	struct ThreadSafeSlab *thread_safe_var_list_cache_;
 	if(multithread_mode){
 		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		var_list_cache_ = this_thread->var_list_cache;
+		thread_safe_var_list_cache_ = this_thread->var_list_cache;
+		client->vars.var_list = thread_safe_slab_alloc(thread_safe_var_list_cache_);
+	} else {
+		var_list_cache_ = var_list_cache;
+		client->vars.var_list = slab_alloc(var_list_cache_);
 	}
-	client->vars.var_list = slab_alloc(var_list_cache_);
 	client->state = CL_FREE;
 	client->client_prepared_statements = NULL;
 
@@ -158,12 +163,17 @@ static void construct_server(void *obj)
 	list_init(&server->head);
 	sbuf_init(&server->sbuf, server_proto);
 
-	struct Slab *var_list_cache_ = var_list_cache;
+	struct Slab *var_list_cache_;
+	struct ThreadSafeSlab *thread_safe_var_list_cache_;
 	if(multithread_mode){
 		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		var_list_cache_ = this_thread->var_list_cache;
+		thread_safe_var_list_cache_ = this_thread->var_list_cache;
+		server->vars.var_list = thread_safe_slab_alloc(thread_safe_var_list_cache_);
+	} else {
+		var_list_cache_ = var_list_cache;
+		server->vars.var_list = slab_alloc(var_list_cache_);
 	}
-	server->vars.var_list = slab_alloc(var_list_cache_);
+	
 	server->state = SV_FREE;
 	server->server_prepared_statements = NULL;
 	statlist_init(&server->outstanding_requests, "outstanding_requests");
@@ -234,9 +244,9 @@ void init_objects_multithread(void)
 		aatree_init(&(threads[thread_id].user_tree), global_user_node_cmp, NULL);
 		aatree_init(&(threads[thread_id].pam_user_tree), credentials_node_cmp, NULL);
 
-		threads[thread_id].pool_cache = slab_create(pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
+		threads[thread_id].pool_cache = thread_safe_slab_create(pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
 		threads[thread_id].peer_pool_cache = slab_create(peer_pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
-		threads[thread_id].db_cache = slab_create(db_cache_name, sizeof(PgDatabase), 0, NULL, USUAL_ALLOC);
+		threads[thread_id].db_cache = thread_safe_slab_create(db_cache_name, sizeof(PgDatabase), 0, NULL, USUAL_ALLOC);
 		threads[thread_id].outstanding_request_cache = slab_create(outstanding_request_cache_name, sizeof(OutstandingRequest), 0, NULL, USUAL_ALLOC);
 		threads[thread_id].user_cache = slab_create(user_cache_name, sizeof(PgGlobalUser), 0, NULL, USUAL_ALLOC);
 
@@ -303,7 +313,7 @@ void init_caches_multithread(void)
 		threads[thread_id].server_cache = slab_create(server_cache_name, sizeof(PgSocket), 0, construct_server, USUAL_ALLOC);
 		threads[thread_id].client_cache = slab_create(client_cache_name, sizeof(PgSocket), 0, construct_client, USUAL_ALLOC);
 		threads[thread_id].iobuf_cache = slab_create(iobuf_cache_name, IOBUF_SIZE, 0, do_iobuf_reset, USUAL_ALLOC);
-		threads[thread_id].var_list_cache = slab_create(var_list_cache_name, sizeof(struct PStr *) * get_num_var_cached(), 0, NULL, USUAL_ALLOC);
+		threads[thread_id].var_list_cache = thread_safe_slab_create(var_list_cache_name, sizeof(struct PStr *) * get_num_var_cached(), 0, NULL, USUAL_ALLOC);
 		threads[thread_id].server_prepared_statement_cache = slab_create(server_prepared_statement_cache_name, sizeof(PgServerPreparedStatement), 0, NULL, USUAL_ALLOC);
 	}
 }
@@ -311,16 +321,24 @@ void init_caches_multithread(void)
 /* free all memory related to the given client */
 static void client_free(PgSocket *client)
 {
-	struct Slab * var_list_cache_ = var_list_cache;
+	struct Slab * var_list_cache_;
+	struct ThreadSafeSlab * thread_safe_var_list_cache_;
 	struct Slab * client_cache_ = client_cache;
 	if(multithread_mode){
 		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		var_list_cache_ = this_thread->var_list_cache;
+		thread_safe_var_list_cache_ = this_thread->var_list_cache;
 		client_cache_ = this_thread->client_cache;
+	} else {
+		var_list_cache_ = var_list_cache;
+		client_cache_ = client_cache;
 	}
 	free_client_prepared_statements(client);
 	varcache_clean(&client->vars);
-	slab_free(var_list_cache_, client->vars.var_list);
+	if (multithread_mode) {
+		thread_safe_slab_free(thread_safe_var_list_cache_, client->vars.var_list);
+	} else {
+		slab_free(var_list_cache_, client->vars.var_list);
+	}
 	slab_free(client_cache_, client);
 }
 
@@ -329,14 +347,19 @@ static void server_free(PgSocket *server)
 {
 	struct List *el, *tmp_l;
 	OutstandingRequest *request;
-	struct Slab *outstanding_request_cache_ = outstanding_request_cache;
-	struct Slab *var_list_cache_ = var_list_cache;
-	struct Slab *server_cache_ = server_cache;
+	struct Slab *outstanding_request_cache_;
+	struct Slab *var_list_cache_;
+	struct ThreadSafeSlab *thread_safe_var_list_cache_;
+	struct Slab *server_cache_;
 	if(multithread_mode){
 		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 		outstanding_request_cache_ = this_thread->outstanding_request_cache;
-		var_list_cache_ = this_thread->var_list_cache;
+		thread_safe_var_list_cache_ = this_thread->var_list_cache;
 		server_cache_ = this_thread->server_cache;
+	} else {
+		var_list_cache_ = var_list_cache;
+		outstanding_request_cache_ = outstanding_request_cache;
+		server_cache_ = server_cache;
 	}
 	statlist_for_each_safe(el, &server->outstanding_requests, tmp_l) {
 		request = container_of(el, OutstandingRequest, node);
@@ -348,7 +371,11 @@ static void server_free(PgSocket *server)
 
 	free_server_prepared_statements(server);
 	varcache_clean(&server->vars);
-	slab_free(var_list_cache_, server->vars.var_list);
+	if (multithread_mode) {
+		thread_safe_slab_free(thread_safe_var_list_cache_, server->vars.var_list);
+	} else {
+		slab_free(var_list_cache_, server->vars.var_list);
+	}
 	slab_free(server_cache_, server);
 }
 
@@ -609,16 +636,22 @@ PgDatabase *add_peer(const char *name, int peer_id)
 PgDatabase *add_database(const char *name, int thread_id)
 {
 	PgDatabase *db = find_database(name, thread_id);
+	struct ThreadSafeSlab* thread_safe_db_cache_;
+	struct Slab* db_cache_;
+	struct ThreadSafeStatList* thread_safe_database_list_;
+	struct StatList* database_list_;
 
 	/* create new object if needed */
 	if (db == NULL) {
-		struct Slab* db_cache_ = db_cache;
-		struct StatList* database_list_ = &database_list;
 		if(thread_id != -1){
-			db_cache_ = threads[thread_id].db_cache;
-			database_list_ = &(threads[thread_id].database_list);
+			thread_safe_db_cache_ = threads[thread_id].db_cache;
+			thread_safe_database_list_ = &(threads[thread_id].database_list);
+			db = thread_safe_slab_alloc(thread_safe_db_cache_);
+		} else {
+			db_cache_ = db_cache;
+			database_list_ = &database_list;
+			db = slab_alloc(db_cache_);
 		}
-		db = slab_alloc(db_cache_);
 
 		if (!db)
 			return NULL;
@@ -626,7 +659,11 @@ PgDatabase *add_database(const char *name, int thread_id)
 		list_init(&db->head);
 		if (strlcpy(db->name, name, sizeof(db->name)) >= sizeof(db->name)) {
 			log_warning("too long db name: %s", name);
-			slab_free(db_cache_, db);
+			if(thread_id != -1){
+				thread_safe_slab_free(thread_safe_db_cache_, db);
+			} else {
+				slab_free(db_cache_, db);
+			}
 			return NULL;
 		}
 		aatree_init(&db->user_tree, credentials_node_cmp, credentials_node_release);
@@ -898,22 +935,37 @@ PgCredentials *find_global_credentials(const char *name, int thread_id)
 static PgPool *new_pool(PgDatabase *db, PgCredentials *user_credentials)
 {
 	PgPool *pool;
-	struct Slab *pool_cache_ = pool_cache;
-    struct Slab *var_list_cache_ = var_list_cache;
-	struct StatList *pool_list_ptr = &pool_list;
+	struct Slab *pool_cache_;
+	struct ThreadSafeSlab* thread_safe_pool_cache_;
+
+    struct Slab *var_list_cache_;
+	struct ThreadSafeSlab *thread_safe_var_list_cache_;
+
+	struct StatList *pool_list_ptr;
+	struct ThreadSafeStatList* thread_safe_pool_list_ptr;
+
 	if(multithread_mode){
 		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		pool_cache_ = this_thread->pool_cache;
-		var_list_cache_ = this_thread->var_list_cache;
-		pool_list_ptr =  &(this_thread->pool_list);
+		thread_safe_pool_cache_ = this_thread->pool_cache;
+		thread_safe_var_list_cache_ = this_thread->var_list_cache;
+		thread_safe_pool_list_ptr =  &(this_thread->pool_list);
+		pool = thread_safe_slab_alloc(thread_safe_pool_cache_);
+	} else {
+		pool_cache_ = pool_cache;
+		var_list_cache_ = var_list_cache;
+		pool_list_ptr = &pool_list;
+		pool = slab_alloc(pool_cache_);
 	}
-	pool = slab_alloc(pool_cache_);
 	if (!pool)
 		return NULL;
 
 	list_init(&pool->head);
 	list_init(&pool->map_head);
-	pool->orig_vars.var_list = slab_alloc(var_list_cache_);
+	if (multithread_mode) {
+		pool->orig_vars.var_list = thread_safe_slab_alloc(thread_safe_var_list_cache_);
+	} else {
+		pool->orig_vars.var_list = slab_alloc(var_list_cache_);
+	}
 
 	pool->user_credentials = user_credentials;
 	pool->db = db;
@@ -951,11 +1003,12 @@ static PgPool *new_peer_pool(PgDatabase *db)
 	PgPool *pool;
 	struct Slab *peer_pool_cache_ = peer_pool_cache;
 	struct Slab *var_list_cache_ = var_list_cache;
+	struct ThreadSafeSlab *thread_safe_var_list_cache_;
 	struct StatList* peer_pool_list_ptr = &peer_pool_list;
 	if(multithread_mode){
 		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 		peer_pool_cache_ = this_thread->peer_pool_cache;
-		var_list_cache_ = this_thread->var_list_cache;
+		thread_safe_var_list_cache_ = this_thread->var_list_cache;
 		peer_pool_list_ptr = &this_thread->peer_pool_list;
 	}
 	pool = slab_alloc(peer_pool_cache_);
@@ -964,7 +1017,11 @@ static PgPool *new_peer_pool(PgDatabase *db)
 
 	list_init(&pool->head);
 	list_init(&pool->map_head);
-	pool->orig_vars.var_list = slab_alloc(var_list_cache_);
+	if (multithread_mode) {
+		pool->orig_vars.var_list = thread_safe_slab_alloc(thread_safe_var_list_cache_);
+	} else {
+		pool->orig_vars.var_list = slab_alloc(var_list_cache_);
+	}
 
 	pool->db = db;
 
@@ -3085,13 +3142,13 @@ void objects_cleanup_multithread(void)
 		threads[thread_id].client_cache = NULL;
 		slab_destroy(threads[thread_id].peer_pool_cache);
 		threads[thread_id].peer_pool_cache = NULL;
-		slab_destroy(threads[thread_id].pool_cache);
+		thread_safe_slab_destroy(threads[thread_id].pool_cache);
 		threads[thread_id].pool_cache = NULL;
-		slab_destroy(threads[thread_id].db_cache);
+		thread_safe_slab_destroy(threads[thread_id].db_cache);
 		threads[thread_id].db_cache = NULL;
 		slab_destroy(threads[thread_id].iobuf_cache);
 		threads[thread_id].iobuf_cache = NULL;
-		slab_destroy(threads[thread_id].var_list_cache);
+		thread_safe_slab_destroy(threads[thread_id].var_list_cache);
 		threads[thread_id].var_list_cache = NULL;
 		slab_destroy(threads[thread_id].server_prepared_statement_cache);
 		threads[thread_id].server_prepared_statement_cache = NULL;
