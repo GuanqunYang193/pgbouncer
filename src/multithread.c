@@ -250,11 +250,11 @@ void init_thread(int thread_id){
 	if (fcntl(threads[thread_id].pipefd[1], F_SETFL, flags | O_NONBLOCK) < 0) {
 		die("set pipe flag failed");
 	}
-	statlist_init(&(threads[thread_id].pool_list), NULL);
+	thread_safe_statlist_init(&(threads[thread_id].pool_list), NULL);
 	statlist_init(&(threads[thread_id].peer_pool_list), NULL);
 	statlist_init(&(threads[thread_id].login_client_list), NULL);
-	statlist_init(&(threads[thread_id].database_list), NULL);
-	statlist_init(&(threads[thread_id].autodatabase_idle_list), NULL);
+	thread_safe_statlist_init(&(threads[thread_id].database_list), NULL);
+	thread_safe_statlist_init(&(threads[thread_id].autodatabase_idle_list), NULL);
 	statlist_init(&(threads[thread_id].user_list), NULL);
 	statlist_init(&(threads[thread_id].justfree_client_list), NULL);
 	statlist_init(&(threads[thread_id].justfree_server_list), NULL);

@@ -797,31 +797,57 @@ PgDatabase *find_peer(int peer_id)
 	return NULL;
 }
 
+static void find_database_cb(struct List *item, void *ctx) {
+	PgDatabase *db = container_of(item, PgDatabase, head);
+	struct {
+		const char *name;
+		PgDatabase **db;
+	} *data = ctx;
+	if (strcmp(db->name, data->name) == 0)
+		*(data->db) = db;
+}
+
 /* find an existing database */
 PgDatabase *find_database(const char *name, int thread_id)
 {
-	struct StatList* database_list_ = &database_list;
-	struct StatList* autodatabase_idle_list_ = &autodatabase_idle_list;
-	if(thread_id != -1){
-		database_list_ = &(threads[thread_id].database_list);
-		autodatabase_idle_list_ = &(threads[thread_id].autodatabase_idle_list);
-	}
-
 	struct List *item, *tmp;
 	PgDatabase *db;
-	statlist_for_each(item, database_list_) {
-		db = container_of(item, PgDatabase, head);
-		if (strcmp(db->name, name) == 0)
+	
+	if(thread_id != -1){
+		struct {
+			const char *name;
+			PgDatabase **db;
+		} data = {name, &db};
+		struct ThreadSafeStatList* database_list_ = &(threads[thread_id].database_list);
+		struct ThreadSafeStatList* autodatabase_idle_list_ = &(threads[thread_id].autodatabase_idle_list);
+		thread_safe_statlist_iterate(database_list_, find_database_cb, &data);
+		if (db)
 			return db;
-	}
-	/* also trying to find in idle autodatabases list */
-	statlist_for_each_safe(item, autodatabase_idle_list_, tmp) {
-		db = container_of(item, PgDatabase, head);
-		if (strcmp(db->name, name) == 0) {
+		thread_safe_statlist_iterate(autodatabase_idle_list_, find_database_cb, &data);
+		if (db) {
 			db->inactive_time = 0;
-			statlist_remove(autodatabase_idle_list_, &db->head);
+			thread_safe_statlist_remove(autodatabase_idle_list_, &db->head);
+			// TODO(beihao): thread_safe_put_in_order
 			put_in_order(&db->head, database_list_, cmp_database);
-			return db;
+		}
+		return db;
+	} else {
+		struct StatList* database_list_ = &database_list;
+		struct StatList* autodatabase_idle_list_ = &autodatabase_idle_list;
+		statlist_for_each(item, database_list_) {
+			db = container_of(item, PgDatabase, head);
+			if (strcmp(db->name, name) == 0)
+				return db;
+		}
+		/* also trying to find in idle autodatabases list */
+		statlist_for_each_safe(item, autodatabase_idle_list_, tmp) {
+			db = container_of(item, PgDatabase, head);
+			if (strcmp(db->name, name) == 0) {
+				db->inactive_time = 0;
+				statlist_remove(autodatabase_idle_list_, &db->head);
+				put_in_order(&db->head, database_list_, cmp_database);
+				return db;
+			}
 		}
 	}
 	return NULL;
@@ -2897,11 +2923,7 @@ void tag_autodb_dirty(void)
 			thread_safe_statlist_iterate(&(threads[thread_id].database_list), tag_autodb_dirty_cb, &thread_id);
 		}
 		FOR_EACH_THREAD(thread_id){
-			statlist_for_each_safe(item, &(threads[thread_id].autodatabase_idle_list), tmp) {
-				db = container_of(item, PgDatabase, head);
-				if (db->db_auto)
-					register_auto_database(db->name, thread_id);
-			}
+			thread_safe_statlist_iterate(&(threads[thread_id].autodatabase_idle_list), tag_autodb_dirty_cb, &thread_id);
 		}
 
 		/*
@@ -3032,10 +3054,7 @@ void objects_cleanup_multithread(void)
 	reuse_just_freed_objects();
 
 	FOR_EACH_THREAD(thread_id){
-		statlist_for_each_safe(item, &(threads[thread_id].autodatabase_idle_list), tmp) {
-			db = container_of(item, PgDatabase, head);
-			kill_database(db, thread_id);
-		}
+		thread_safe_statlist_iterate(&(threads[thread_id].autodatabase_idle_list), kill_database_cb, &thread_id);
 		thread_safe_statlist_iterate(&(threads[thread_id].database_list), kill_database_cb, &thread_id);
 		statlist_for_each_safe(item, &(threads[thread_id].justfree_client_list), tmp) {
 			PgSocket *client = container_of(item, PgSocket, head);
