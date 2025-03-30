@@ -436,7 +436,7 @@ void change_server_state(PgSocket *server, SocketState newstate)
 	struct StatList* justfree_server_list_ptr = &justfree_server_list;
 	if(multithread_mode){
 		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		justfree_server_list_ptr = &(this_thread->justfree_client_list);
+		justfree_server_list_ptr = &(this_thread->justfree_server_list);
 	}
 	/* remove from old location */
 	switch (server->state) {
