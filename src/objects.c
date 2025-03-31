@@ -1088,7 +1088,7 @@ PgPool *get_pool(PgDatabase *db, PgCredentials *user_credentials)
 
 	list_for_each(item, &user_credentials->global_user->pool_list) {
 		pool = container_of(item, PgPool, map_head);
-		if (pool->db == db)
+		if (pool->db->name == db->name)
 			return pool;
 	}
 
@@ -1685,7 +1685,7 @@ void disconnect_server(PgSocket *server, bool send_term, const char *reason, ...
 	if (cf_log_disconnections) {
 		if(multithread_mode){
 			Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-			slog_info(server, "[Thread %d]closing because: %s (age=%" PRIu64 "s)", this_thread->thread_id, reason,
+			slog_info(server, "[Thread %d] closing because: %s (age=%" PRIu64 "s)", this_thread->thread_id, reason,
 				(now - server->connect_time) / USEC);
 		}else{
 			slog_info(server, "closing because: %s (age=%" PRIu64 "s)", reason,
@@ -3145,6 +3145,7 @@ static void kill_database_cb(struct List *item, void *ctx) {
 
 void objects_cleanup_multithread(void)
 {
+	log_info("objects_cleanup_multithread: start");
 	struct List *item, *tmp;
 	PgDatabase *db;
 
@@ -3153,6 +3154,7 @@ void objects_cleanup_multithread(void)
 	reuse_just_freed_objects();
 
 	FOR_EACH_THREAD(thread_id){
+		log_info("objects_cleanup_multithread: thread_id=%d", thread_id);
 		thread_safe_statlist_iterate(&(threads[thread_id].autodatabase_idle_list), kill_database_cb, &thread_id);
 		thread_safe_statlist_iterate(&(threads[thread_id].database_list), kill_database_cb, &thread_id);
 		statlist_for_each_safe(item, &(threads[thread_id].justfree_client_list), tmp) {
