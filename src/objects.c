@@ -594,6 +594,41 @@ static int cmp_database(struct List *i1, struct List *i2)
 	return strcmp(db1->name, db2->name);
 }
 
+static void thread_safe_put_in_order_cb(struct List *item, void *ctx) {
+	struct {
+		struct List *newitem;
+		bool *found;
+		int (*cmpfn)(struct List *, struct List *);
+		struct ThreadSafeStatList *list;
+	} *data = ctx;
+	if (*data->found)
+		return;
+	
+	int res = data->cmpfn(item, data->newitem);
+	if (res == 0) {
+		fatal("thread_safe_put_in_order_cb: found existing elem");
+	} else if (res > 0) {
+		thread_safe_statlist_put_before(data->list, data->newitem, item);
+		return;
+	}
+}
+
+static void thread_safe_put_in_order(struct List *newitem, struct ThreadSafeStatList *list,
+			 int (*cmpfn)(struct List *, struct List *))
+{
+	bool found = false;
+	struct {
+		struct List *newitem;
+		bool *found;
+		int (*cmpfn)(struct List *, struct List *);
+		struct ThreadSafeStatList *list;
+	} data = {newitem, &found, cmpfn, list};
+	thread_safe_statlist_iterate(list, thread_safe_put_in_order_cb, &data);
+	if (!found) {
+		thread_safe_statlist_append(list, newitem);
+	}
+}
+
 /* put elem into list in correct pos */
 static void put_in_order(struct List *newitem, struct StatList *list,
 			 int (*cmpfn)(struct List *, struct List *))
@@ -643,7 +678,7 @@ PgDatabase *add_database(const char *name, int thread_id)
 
 	/* create new object if needed */
 	if (db == NULL) {
-		if(thread_id != -1){
+		if(multithread_mode){
 			thread_safe_db_cache_ = threads[thread_id].db_cache;
 			thread_safe_database_list_ = &(threads[thread_id].database_list);
 			db = thread_safe_slab_alloc(thread_safe_db_cache_);
@@ -659,7 +694,7 @@ PgDatabase *add_database(const char *name, int thread_id)
 		list_init(&db->head);
 		if (strlcpy(db->name, name, sizeof(db->name)) >= sizeof(db->name)) {
 			log_warning("too long db name: %s", name);
-			if(thread_id != -1){
+			if(multithread_mode){
 				thread_safe_slab_free(thread_safe_db_cache_, db);
 			} else {
 				slab_free(db_cache_, db);
@@ -667,7 +702,12 @@ PgDatabase *add_database(const char *name, int thread_id)
 			return NULL;
 		}
 		aatree_init(&db->user_tree, credentials_node_cmp, credentials_node_release);
-		put_in_order(&db->head, database_list_, cmp_database);
+
+		if(multithread_mode){
+			thread_safe_put_in_order(&db->head, thread_safe_database_list_, cmp_database);
+		} else {
+			put_in_order(&db->head, database_list_, cmp_database);
+		}
 	}
 
 	return db;
@@ -850,7 +890,7 @@ PgDatabase *find_database(const char *name, int thread_id)
 	struct List *item, *tmp;
 	PgDatabase *db;
 	
-	if(thread_id != -1){
+	if(multithread_mode){
 		struct {
 			const char *name;
 			PgDatabase **db;
@@ -864,8 +904,7 @@ PgDatabase *find_database(const char *name, int thread_id)
 		if (db) {
 			db->inactive_time = 0;
 			thread_safe_statlist_remove(autodatabase_idle_list_, &db->head);
-			// TODO(beihao): thread_safe_put_in_order
-			put_in_order(&db->head, database_list_, cmp_database);
+			thread_safe_put_in_order(&db->head, database_list_, cmp_database);
 		}
 		return db;
 	} else {
@@ -901,7 +940,7 @@ PgDatabase *find_or_register_database(PgSocket *connection, const char *name, in
 		db = register_auto_database(name, thread_id);
 		if (db != NULL) {
 			slog_info(connection,
-				  "registered new auto-database: %s", name);
+				  "[Thread %d] registered new auto-database: %s", thread_id, name);
 		}
 	}
 	return db;
@@ -936,24 +975,23 @@ static PgPool *new_pool(PgDatabase *db, PgCredentials *user_credentials)
 {
 	PgPool *pool;
 	struct Slab *pool_cache_;
-	struct ThreadSafeSlab* thread_safe_pool_cache_;
+	struct Slab *var_list_cache_;
+	struct StatList *pool_list_ptr_;
 
-    struct Slab *var_list_cache_;
+	struct ThreadSafeSlab *thread_safe_pool_cache_;
 	struct ThreadSafeSlab *thread_safe_var_list_cache_;
-
-	struct StatList *pool_list_ptr;
-	struct ThreadSafeStatList* thread_safe_pool_list_ptr;
+	struct ThreadSafeStatList *thread_safe_pool_list_ptr_;
 
 	if(multithread_mode){
 		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 		thread_safe_pool_cache_ = this_thread->pool_cache;
 		thread_safe_var_list_cache_ = this_thread->var_list_cache;
-		thread_safe_pool_list_ptr =  &(this_thread->pool_list);
+		thread_safe_pool_list_ptr_ = &(this_thread->pool_list);
 		pool = thread_safe_slab_alloc(thread_safe_pool_cache_);
 	} else {
 		pool_cache_ = pool_cache;
 		var_list_cache_ = var_list_cache;
-		pool_list_ptr = &pool_list;
+		pool_list_ptr_ = &pool_list;
 		pool = slab_alloc(pool_cache_);
 	}
 	if (!pool)
@@ -985,7 +1023,11 @@ static PgPool *new_pool(PgDatabase *db, PgCredentials *user_credentials)
 	list_append(&user_credentials->global_user->pool_list, &pool->map_head);
 
 	/* keep pools in db/user order to make stats faster */
-	put_in_order(&pool->head, pool_list_ptr, cmp_pool);
+	if(multithread_mode){
+		thread_safe_put_in_order(&pool->head, thread_safe_pool_list_ptr_, cmp_pool);
+	} else {
+		put_in_order(&pool->head, pool_list_ptr_, cmp_pool);
+	}
 	
 	return pool;
 }
