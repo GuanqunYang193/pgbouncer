@@ -124,6 +124,7 @@ static void resume_sockets(void)
 	PgPool *pool;
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
+			log_info("resume_sockets thread_id: %d", thread_id);
 			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), resume_sockets_cb, NULL);
 		}
 	}else{
@@ -829,8 +830,9 @@ static void cleanup_inactive_autodatabases(void)
 
 static void create_pool_for_forced_user_cb(struct List *item, void *ctx){
 	PgDatabase *db = container_of(item, PgDatabase, head);
+	int thread_id = *(int*)ctx;
 	if (database_min_pool_size(db) > 0 && db->forced_user_credentials != NULL) {
-		get_pool(db, db->forced_user_credentials);
+		get_pool(db, db->forced_user_credentials, thread_id);
 	}
 }
 
@@ -877,6 +879,7 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	struct List *item, *tmp;
 	PgPool *pool;
 	PgDatabase *db;
+	int thread_id;
 
 	static unsigned int seq;
 	seq++;
@@ -911,11 +914,13 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 
 	if(multithread_mode){
 		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+		thread_id = this_thread->thread_id;
 		peer_pool_list_ptr = &(this_thread->peer_pool_list);
 		thread_safe_database_list_ = &(this_thread->database_list);
 		thread_safe_pool_list_ = &(this_thread->pool_list);
 		thread_safe_autodatabase_idle_list_ = &(this_thread->autodatabase_idle_list);
 	} else {
+		thread_id = -1;
 		database_list_ptr = &database_list;
 		pool_list_ptr = &pool_list;
 		autodatabase_idle_list_ptr = &autodatabase_idle_list;
@@ -934,12 +939,12 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	 * many users.
 	   _	 */
 	if(multithread_mode){
-		thread_safe_statlist_iterate(thread_safe_database_list_, create_pool_for_forced_user_cb, NULL);
+		thread_safe_statlist_iterate(thread_safe_database_list_, create_pool_for_forced_user_cb, &thread_id);
 	} else {
 		statlist_for_each_safe(item, database_list_ptr, tmp) {
 			db = container_of(item, PgDatabase, head);
 			if (database_min_pool_size(db) > 0 && db->forced_user_credentials != NULL) {
-				get_pool(db, db->forced_user_credentials);
+				get_pool(db, db->forced_user_credentials, -1);
 			}
 		}
 	}
@@ -1152,8 +1157,14 @@ void kill_database(PgDatabase *db, int thread_id)
 	pktbuf_free(db->startup_params);
 	free(db->host);
 
-	if (db->forced_user_credentials)
-		slab_free(credentials_cache, db->forced_user_credentials);
+	
+	if (db->forced_user_credentials) {
+		if(multithread_mode){
+			thread_safe_slab_free(thread_safe_credentials_cache, db->forced_user_credentials);
+		} else {
+			slab_free(credentials_cache, db->forced_user_credentials);
+		}
+	}
 	free(db->connect_query);
 	if (db->inactive_time) {
 		if(multithread_mode){

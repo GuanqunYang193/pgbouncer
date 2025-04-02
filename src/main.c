@@ -660,11 +660,11 @@ static void check_limits(void)
 {
 	struct rlimit lim;
 	int total_users = 0;
+
 	if(multithread_mode){
-		FOR_EACH_THREAD(thread_id){
-			total_users += statlist_count(&(threads[thread_id].user_list));
-		}
-	}else{
+		// TODO(beihao): implement`
+		total_users = statlist_count(&user_list);
+	} else {
 		total_users = statlist_count(&user_list);
 	}
 
@@ -985,8 +985,12 @@ int main(int argc, char *argv[])
 	if (getuid() == 0)
 		die("PgBouncer should not run as root");
 	
-	if(!multithread_mode){
-		admin_setup();
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			admin_setup(thread_id);
+		}
+	} else {
+		admin_setup(-1);
 	}
 
 	if (cf_reboot) {

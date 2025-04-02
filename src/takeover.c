@@ -388,7 +388,7 @@ void init_launch_new_connection(int thread_id){
 	PgPool *pool = NULL;
 	db = find_database("pgbouncer", thread_id);
 	if (db)
-		pool = get_pool(db, db->forced_user_credentials);
+		pool = get_pool(db, db->forced_user_credentials, thread_id);
 
 	if (!pool)
 		fatal("no admin pool?");

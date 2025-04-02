@@ -45,9 +45,7 @@ typedef struct Thread {
     struct SignalEvent signal_event;
     struct ThreadSafeStatList database_list;
     struct ThreadSafeStatList autodatabase_idle_list;
-    struct StatList user_list;
     struct Slab *client_cache;
-    struct Slab *user_cache;
     struct Slab *server_cache;
     struct ThreadSafeSlab *pool_cache;
     struct Slab *peer_pool_cache;

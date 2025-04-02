@@ -125,7 +125,6 @@ static int count_paused_databases(void)
 	struct List *item;
 	PgDatabase *db;
     int cnt = 0;
-    // FIXME find a better way to count 
 	if (multithread_mode) {
 		FOR_EACH_THREAD(thread_id){
 			thread_safe_statlist_iterate(&(threads[thread_id].database_list), 
@@ -145,7 +144,7 @@ static void count_db_active_cb(struct List *item, void *ctx) {
     struct {
         PgDatabase *db;
         int *cnt;
-    } *data = (struct { PgDatabase *db; int *cnt; } *)ctx;
+    } *data = ctx;
     if (pool->db->name == data->db->name)
         *data->cnt += pool_server_count(pool);
 }
@@ -494,7 +493,7 @@ static void show_fds_from_list_cb(struct List *item, void *ctx) {
 		PgSocket *admin; 
 		int thread_id; 
 		bool *res;
-	} *data = (struct { PgSocket *admin; int thread_id; bool *res; } *)ctx;
+	} *data = ctx;
 
 	show_fds_from_lists(data->admin, pool, data->thread_id, data->res);
 }
@@ -632,15 +631,10 @@ static void show_one_database_cb(struct List *item, void *ctx) {
 /* Command: SHOW DATABASES */
 static bool admin_show_databases(PgSocket *admin, const char *arg)
 {
-	PgDatabase *db;
 	struct List *item;
-	const char *f_user;
 	PktBuf *buf;
 	struct CfValue cv;
 	struct CfValue load_balance_hosts_lookup;
-	const char *pool_mode_str;
-	usec_t server_lifetime_secs;
-	const char *load_balance_hosts_str;
 
     cv.extra = pool_mode_map;
     load_balance_hosts_lookup.extra = load_balance_hosts_map;
@@ -717,29 +711,40 @@ static bool admin_show_lists(PgSocket *admin, const char *arg)
 	}
 	pktbuf_write_RowDescription(buf, "si", "list", "items");
 #define SENDLIST(name, size) pktbuf_write_DataRow(buf, "si", (name), (size))
-	int total_login_clients = 0;
+
+	int total_database_count = 0;
 	int total_pool_list = 0;
 	int total_peer_pool_list = 0;
-	int database_count = 0;
 	int total_free_clients = 0;
 	int total_used_clients = 0;
+	int total_login_clients = 0;
 	int total_free_servers = 0;
 	int total_used_servers = 0;
-	// FIXME wrong calculation
-	int total_user_list = 0;
-	FOR_EACH_THREAD(thread_id){
-		total_login_clients += statlist_count(&(threads[thread_id].login_client_list));
-		total_pool_list += thread_safe_statlist_count(&(threads[thread_id].pool_list));
-		total_peer_pool_list += statlist_count(&(threads[thread_id].peer_pool_list));
-		database_count += thread_safe_statlist_count(&(threads[thread_id].database_list));
-		total_free_clients += slab_free_count(&(threads[thread_id].client_cache));
-		total_used_clients += slab_active_count(&(threads[thread_id].client_cache));
-		total_free_servers += slab_free_count(&(threads[thread_id].server_cache));
-		total_used_servers += slab_active_count(&(threads[thread_id].server_cache));
-		total_user_list += statlist_count(&(threads[thread_id].user_list));
+	
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			total_database_count += thread_safe_statlist_count(&(threads[thread_id].database_list));
+			total_pool_list += thread_safe_statlist_count(&(threads[thread_id].pool_list));
+			total_peer_pool_list += statlist_count(&(threads[thread_id].peer_pool_list));
+			total_free_clients += slab_free_count(threads[thread_id].client_cache);
+			total_used_clients += slab_active_count(threads[thread_id].client_cache);
+			total_login_clients += statlist_count(&(threads[thread_id].login_client_list));
+			total_free_servers += slab_free_count(threads[thread_id].server_cache);
+			total_used_servers += slab_active_count(threads[thread_id].server_cache);
+		}
+	} else {
+		total_database_count = statlist_count(&database_list);
+		total_pool_list = statlist_count(&pool_list);
+		total_peer_pool_list = statlist_count(&peer_pool_list);
+		total_free_clients = slab_free_count(client_cache);
+		total_used_clients = slab_active_count(client_cache);
+		total_login_clients = statlist_count(&login_client_list);
+		total_free_servers = slab_free_count(server_cache);
+		total_used_servers = slab_active_count(server_cache);
 	}
-	SENDLIST("databases", database_count);
-	SENDLIST("users", total_user_list);
+
+	SENDLIST("databases", total_database_count);
+	SENDLIST("users", statlist_count(&user_list));
 	SENDLIST("peers", statlist_count(&peer_list));
 	SENDLIST("pools", total_pool_list);
 	SENDLIST("peer_pools", total_peer_pool_list);
@@ -760,41 +765,16 @@ static bool admin_show_lists(PgSocket *admin, const char *arg)
 	return true;
 }
 
-static void show_users(PktBuf *buf, int thread_id, struct CfValue *cv) {
-	struct List *item;
-	const char *pool_mode_str;
-	char pool_size_str[12] = "";
-	char res_pool_size_str[12] = "";
-	statlist_for_each(item, &(threads[thread_id].user_list)) {
-		PgGlobalUser *user = container_of(item, PgGlobalUser, head);
-		if (user->pool_size >= 0)
-			snprintf(pool_size_str, sizeof(pool_size_str), "%9d", user->pool_size);
-		if (user->res_pool_size >= 0)
-			snprintf(res_pool_size_str, sizeof(res_pool_size_str), "%9d", user->res_pool_size);
-		pool_mode_str = NULL;
-
-		cv->value_p = &user->pool_mode;
-		if (user->pool_mode != POOL_INHERIT)
-			pool_mode_str = cf_get_lookup(&cv);
-
-		pktbuf_write_DataRow(buf, "issssiiii", thread_id, 
-							user->credentials.name,
-							pool_size_str,
-							res_pool_size_str,
-							pool_mode_str,
-							user_max_connections(user),
-							user->connection_count,
-							user_client_max_connections(user),
-							user->client_connection_count
-							);
-	}
-}
-
 /* Command: SHOW USERS */
 static bool admin_show_users(PgSocket *admin, const char *arg)
 {
+	struct List *item;
 	PktBuf *buf = pktbuf_dynamic(256);
 	struct CfValue cv;
+	char pool_size_str[12] = "";
+	char res_pool_size_str[12] = "";
+	const char *pool_mode_str;
+
 	if (!buf) {
 		admin_error(admin, "no mem");
 		return true;
@@ -802,20 +782,30 @@ static bool admin_show_users(PgSocket *admin, const char *arg)
 	cv.extra = pool_mode_map;
 
 	pktbuf_write_RowDescription(
-		buf, "issssiiii", "thread_id", 
-		"name", "pool_size", "reserve_pool_size", "pool_mode", 
-		"max_user_connections", "current_connections",
+		buf, "ssssiiii", "name", "pool_size", "reserve_pool_size", "pool_mode", "max_user_connections", "current_connections",
 		"max_user_client_connections", "current_client_connections");
+	statlist_for_each(item, &user_list) {
+		PgGlobalUser *user = container_of(item, PgGlobalUser, head);
+		if (user->pool_size >= 0)
+			snprintf(pool_size_str, sizeof(pool_size_str), "%9d", user->pool_size);
+		if (user->res_pool_size >= 0)
+			snprintf(res_pool_size_str, sizeof(res_pool_size_str), "%9d", user->res_pool_size);
+		pool_mode_str = NULL;
 
-	// FIXME wrong user
-	if (multithread_mode) {
-		FOR_EACH_THREAD(thread_id){
-			show_users(buf, thread_id, &cv);
-		}
-	} else {
-		show_users(buf, -1, &cv);
+		cv.value_p = &user->pool_mode;
+		if (user->pool_mode != POOL_INHERIT)
+			pool_mode_str = cf_get_lookup(&cv);
+
+		pktbuf_write_DataRow(buf, "ssssiiii", user->credentials.name,
+				     pool_size_str,
+				     res_pool_size_str,
+				     pool_mode_str,
+				     user_max_connections(user),
+				     user->connection_count,
+				     user_client_max_connections(user),
+				     user->client_connection_count
+				     );
 	}
-
 	admin_flush(admin, buf, "SHOW");
 	return true;
 }
@@ -1773,6 +1763,8 @@ static PgSocket *find_socket_in_list(unsigned long long int target_id, struct St
 }
 
 static void find_client_global_internal(PgSocket *kill_client, PgPool *pool, int target_id) {
+	if (kill_client != NULL)
+		return;
 	kill_client = find_socket_in_list(target_id, &pool->active_client_list);
 	if (kill_client != NULL)
 		return;
@@ -1798,10 +1790,9 @@ static void find_client_global_cb(struct List *item, void *ctx) {
 
 static PgSocket *find_client_global(unsigned long long int target_id)
 {
-	PgSocket *kill_client;
+	PgSocket *kill_client = NULL;
 	struct List *item;
 	PgPool *pool;
-	int thread_id;
 
 	if (multithread_mode) {
 		FOR_EACH_THREAD(thread_id){
@@ -1907,7 +1898,6 @@ static void wait_close_database_cb(struct List *item, void *ctx) {
 /* Command: WAIT_CLOSE */
 static bool admin_cmd_wait_close(PgSocket *admin, const char *arg)
 {
-	PgPool *pool;
 	if (!admin->admin_user)
 		return admin_error(admin, "admin access needed");
 
@@ -2057,7 +2047,8 @@ static bool admin_show_stats(PgSocket *admin, const char *arg)
 	if (multithread_mode) {
 		bool res = true;
 		FOR_EACH_THREAD(thread_id){
-			res &= admin_database_stats(admin, &(threads[thread_id].pool_list));
+			// TODO(beihao): thread safe version
+			res &= admin_database_stats(admin, &threads[thread_id].pool_list);
 		}
 		return res;
 	}
@@ -2070,6 +2061,7 @@ static bool admin_show_stats_totals(PgSocket *admin, const char *arg)
 	if (multithread_mode) {
 		bool res = true;
 		FOR_EACH_THREAD(thread_id){
+			// TODO(beihao): thread safe version
 			res &= admin_database_stats_totals(admin, &(threads[thread_id].pool_list));
 		}
 		return res;
@@ -2082,6 +2074,7 @@ static bool admin_show_stats_averages(PgSocket *admin, const char *arg)
 	if (multithread_mode) {
 		bool res = true;
 		FOR_EACH_THREAD(thread_id){
+			// TODO(beihao): thread safe version
 			res &= admin_database_stats_averages(admin, &(threads[thread_id].pool_list));
 		}
 		return res;
@@ -2094,6 +2087,7 @@ static bool admin_show_totals(PgSocket *admin, const char *arg)
 	if (multithread_mode) {
 		bool res = true;
 		FOR_EACH_THREAD(thread_id){
+			// TODO(beihao): thread safe version
 			show_stat_totals(admin, &(threads[thread_id].pool_list));
 		}
 		return res;
@@ -2318,7 +2312,7 @@ bool admin_post_login(PgSocket *client)
 }
 
 /* init special database and query parsing */
-void admin_setup(void)
+void admin_setup(int thread_id)
 {
 	PgDatabase *db;
 	PgPool *pool;
@@ -2327,7 +2321,6 @@ void admin_setup(void)
 	int res;
 
 	/* fake database */
-	int thread_id = get_current_thread_id(multithread_mode);
 	db = add_database("pgbouncer", thread_id);
 	if (!db)
 		die("no memory for admin database");
@@ -2340,7 +2333,7 @@ void admin_setup(void)
 		die("no mem on startup - cannot alloc pgbouncer user");
 
 	/* fake pool */
-	pool = get_pool(db, db->forced_user_credentials);
+	pool = get_pool(db, db->forced_user_credentials, thread_id);
 	if (!pool)
 		die("cannot create admin pool?");
 	admin_pool = pool;
