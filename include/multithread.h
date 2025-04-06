@@ -12,6 +12,14 @@
 	     (id) < arg_thread_number;  \
 	     (id)++)                    
 
+
+#define GET_LIST(name, thread_id) \
+	(multithread_mode ? (void *)&(threads[thread_id].name) : (void *)&name)
+
+#define GET_CACHE(name, thread_id) \
+	(multithread_mode ? (void *)(threads[thread_id].name) : (void *)(name))
+
+
 typedef struct SignalEvent{
     /*
  * signal handling.

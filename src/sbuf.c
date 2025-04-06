@@ -328,8 +328,8 @@ bool sbuf_close(SBuf *sbuf)
 	if (sbuf->io) {
 		struct Slab *iobuf_cache_ = iobuf_cache;
 		if(multithread_mode){
-			Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-			iobuf_cache_ = this_thread->iobuf_cache;
+			int thread_id = get_current_thread_id(multithread_mode);
+			iobuf_cache_ = threads[thread_id].iobuf_cache;
 		}
 		slab_free(iobuf_cache_, sbuf->io);
 		sbuf->io = NULL;
@@ -926,8 +926,8 @@ static void sbuf_try_resync(SBuf *sbuf, bool release)
 	if (release && iobuf_empty(io)) {
 		struct Slab *iobuf_cache_ = iobuf_cache;
 		if(multithread_mode){
-			Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-			iobuf_cache_ = this_thread->iobuf_cache;
+			int thread_id = get_current_thread_id(multithread_mode);
+			iobuf_cache_ = threads[thread_id].iobuf_cache;
 		}
 		slab_free(iobuf_cache_, io);
 		sbuf->io = NULL;
@@ -972,8 +972,8 @@ static bool allocate_iobuf(SBuf *sbuf)
 	if (sbuf->io == NULL) {
 		struct Slab *iobuf_cache_ = iobuf_cache;
 		if(multithread_mode){
-			Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-			iobuf_cache_ = this_thread->iobuf_cache;
+			int thread_id = get_current_thread_id(multithread_mode);
+			iobuf_cache_ = threads[thread_id].iobuf_cache;
 		}
 		sbuf->io = slab_alloc(iobuf_cache_);
 		if (sbuf->io == NULL) {

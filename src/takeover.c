@@ -201,25 +201,6 @@ static void takeover_clean_socket_list(struct StatList *list)
 	}
 }
 
-static void takeover_postprocess_fds_create_link_cb(struct List *item, void *ctx) {
-	struct List *item2;
-	PgPool *pool = container_of(item, PgPool, head);
-	if (pool->db->admin)
-		return;
-	statlist_for_each(item2, &pool->active_client_list) {
-		PgSocket *client = container_of(item2, PgSocket, head);
-		if (client->suspended && client->tmp_sk_linkfd)
-			takeover_create_link(pool, client);
-	}
-}
-
-static void takeover_postprocess_fds_clean_socket_list_cb(struct List *item, void *ctx) {
-	PgPool *pool = container_of(item, PgPool, head);
-	takeover_clean_socket_list(&pool->active_client_list);
-	takeover_clean_socket_list(&pool->active_server_list);
-	takeover_clean_socket_list(&pool->idle_server_list);
-}
-
 /* all fds loaded, create links */
 static void takeover_postprocess_fds(void)
 {
@@ -227,27 +208,24 @@ static void takeover_postprocess_fds(void)
 	PgSocket *client;
 	PgPool *pool;
 	if(multithread_mode){
-		FOR_EACH_THREAD(thread_id){
-			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), takeover_postprocess_fds_create_link_cb, NULL);
-			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), takeover_postprocess_fds_clean_socket_list_cb, NULL);
+		log_error("takeover_postprocess_fds: multithread mode not supported");
+		return;
+	}
+	statlist_for_each(item, &pool_list) {
+		pool = container_of(item, PgPool, head);
+		if (pool->db->admin)
+			continue;
+		statlist_for_each(item2, &pool->active_client_list) {
+			client = container_of(item2, PgSocket, head);
+			if (client->suspended && client->tmp_sk_linkfd)
+				takeover_create_link(pool, client);
 		}
-	}else{
-		statlist_for_each(item, &pool_list) {
-			pool = container_of(item, PgPool, head);
-			if (pool->db->admin)
-				continue;
-			statlist_for_each(item2, &pool->active_client_list) {
-				client = container_of(item2, PgSocket, head);
-				if (client->suspended && client->tmp_sk_linkfd)
-					takeover_create_link(pool, client);
-			}
-		}
-		statlist_for_each(item, &pool_list) {
-			pool = container_of(item, PgPool, head);
-			takeover_clean_socket_list(&pool->active_client_list);
-			takeover_clean_socket_list(&pool->active_server_list);
-			takeover_clean_socket_list(&pool->idle_server_list);
-		}
+	}
+	statlist_for_each(item, &pool_list) {
+		pool = container_of(item, PgPool, head);
+		takeover_clean_socket_list(&pool->active_client_list);
+		takeover_clean_socket_list(&pool->active_server_list);
+		takeover_clean_socket_list(&pool->idle_server_list);
 	}
 }
 
@@ -382,10 +360,17 @@ bool takeover_login(PgSocket *bouncer)
 	}
 	return res;
 }
+/* launch connection to running process */
+void takeover_init(void)
+{
+	if(multithread_mode){
+		log_error("takeover_init: multithread mode not supported");
+		return;
+	}
 
-void init_launch_new_connection(int thread_id){
 	PgDatabase *db;
 	PgPool *pool = NULL;
+	int thread_id = get_current_thread_id(multithread_mode);
 	db = find_database("pgbouncer", thread_id);
 	if (db)
 		pool = get_pool(db, db->forced_user_credentials, thread_id);
@@ -395,19 +380,6 @@ void init_launch_new_connection(int thread_id){
 
 	log_info("takeover_init: launching connection");
 	launch_new_connection(pool, /* evict_if_needed= */ true);
-}
-
-/* launch connection to running process */
-void takeover_init(void)
-{
-	log_error("takeover init");
-	if(multithread_mode){
-		FOR_EACH_THREAD(thread_id){
-			init_launch_new_connection(thread_id);
-		}
-	}else{
-		init_launch_new_connection(-1);
-	}
 }
 
 void takeover_login_failed(void)

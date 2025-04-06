@@ -179,8 +179,7 @@ static void start_auth_query(PgSocket *client, const char *username)
 {
 	int res;
 	PktBuf *buf;
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-	int thread_id = this_thread->thread_id;
+	int thread_id = get_current_thread_id(multithread_mode);
 	const char *auth_query = client->db->auth_query ? client->db->auth_query : cf_auth_query;
 
 	/* have to fetch user info from db */
@@ -333,8 +332,7 @@ static bool finish_set_pool(PgSocket *client, bool takeover)
 	bool ok = false;
 	int auth;
 	struct HBARule *rule = NULL;
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-	int thread_id = this_thread->thread_id;
+	int thread_id = get_current_thread_id(multithread_mode);
 
 	if (!client->login_user_credentials->mock_auth && !client->db->fake) {
 		PgCredentials *pool_user_credentials;

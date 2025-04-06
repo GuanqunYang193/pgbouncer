@@ -207,7 +207,7 @@ void* worker_func(void* arg){
 
     struct event_base *base = event_base_new();
     if (!base) {
-        fprintf(stderr, "[Thread %ld] Failed to create event_base.\n", this_thread->thread_id);
+        fprintf(stderr, "[Thread %d] Failed to create event_base.\n", this_thread->thread_id);
         die("event_base_new() failed");
     }
 

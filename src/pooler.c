@@ -73,7 +73,7 @@ void cleanup_sockets(void)
 		ls = container_of(el, struct ListenSocket, node);
 		if (event_del(&ls->ev) < 0) {
 			if(multithread_mode){
-				log_warning("[Thread %ld] cleanup_sockets: event_del failed: %s", get_current_thread_id(multithread_mode), strerror(errno));
+				log_warning("[Thread %d] cleanup_sockets: event_del failed: %s", get_current_thread_id(multithread_mode), strerror(errno));
 			}else{
 				log_warning("cleanup_sockets, event_del: %s", strerror(errno));
 			}

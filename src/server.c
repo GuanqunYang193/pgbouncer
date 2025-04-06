@@ -369,8 +369,8 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 	Assert(!server->pool->db->admin);
 	struct Slab *outstanding_request_cache_ = outstanding_request_cache;
 	if(multithread_mode){
-		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		outstanding_request_cache_ = this_thread->outstanding_request_cache;
+		int thread_id = get_current_thread_id(multithread_mode);
+		outstanding_request_cache_ = threads[thread_id].outstanding_request_cache;
 	}
 
 	switch (pkt->type) {
