@@ -1,4 +1,5 @@
 #include <usual/statlist.h>
+#include <usual/statlist_ts.h>
 #include <usual/aatree.h>
 
 #include <pthread.h>
@@ -10,6 +11,14 @@
 	for (int id = 0;                \
 	     (id) < arg_thread_number;  \
 	     (id)++)                    
+
+
+#define GET_LIST(name, thread_id) \
+	(multithread_mode ? (void *)&(threads[thread_id].name) : (void *)&name)
+
+#define GET_CACHE(name, thread_id) \
+	(multithread_mode ? (void *)(threads[thread_id].name) : (void *)(name))
+
 
 typedef struct SignalEvent{
     /*
@@ -39,19 +48,17 @@ typedef struct Thread {
     struct event ev_handle_request;
     int pipefd[2];
     struct StatList login_client_list;
-    struct StatList pool_list;
+    struct ThreadSafeStatList pool_list;
     struct StatList peer_pool_list;
     struct SignalEvent signal_event;
-    struct StatList database_list;
-    struct StatList autodatabase_idle_list;
-    struct StatList user_list;
+    struct ThreadSafeStatList database_list;
+    struct ThreadSafeStatList autodatabase_idle_list;
     struct Slab *client_cache;
-    struct Slab *user_cache;
     struct Slab *server_cache;
-    struct Slab *pool_cache;
+    struct ThreadSafeSlab *pool_cache;
     struct Slab *peer_pool_cache;
-    struct Slab *db_cache;
-    struct Slab *var_list_cache;
+    struct ThreadSafeSlab *db_cache;
+    struct ThreadSafeSlab *var_list_cache;
     struct Slab *iobuf_cache;
     struct Slab *server_prepared_statement_cache;
     struct Slab *outstanding_request_cache;

@@ -110,8 +110,8 @@ struct PktBuf *pktbuf_temp(void)
 {
 	PktBuf* temp_pktbuf_ = temp_pktbuf;
 	if(multithread_mode){
-		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		temp_pktbuf_ = this_thread->temp_pktbuf;
+		int thread_id = get_current_thread_id(multithread_mode);
+		temp_pktbuf_ = threads[thread_id].temp_pktbuf;
 	}
 
 	if (!(temp_pktbuf_))

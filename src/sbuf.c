@@ -328,8 +328,8 @@ bool sbuf_close(SBuf *sbuf)
 	if (sbuf->io) {
 		struct Slab *iobuf_cache_ = iobuf_cache;
 		if(multithread_mode){
-			Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-			iobuf_cache_ = this_thread->iobuf_cache;
+			int thread_id = get_current_thread_id(multithread_mode);
+			iobuf_cache_ = threads[thread_id].iobuf_cache;
 		}
 		slab_free(iobuf_cache_, sbuf->io);
 		sbuf->io = NULL;
@@ -926,8 +926,8 @@ static void sbuf_try_resync(SBuf *sbuf, bool release)
 	if (release && iobuf_empty(io)) {
 		struct Slab *iobuf_cache_ = iobuf_cache;
 		if(multithread_mode){
-			Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-			iobuf_cache_ = this_thread->iobuf_cache;
+			int thread_id = get_current_thread_id(multithread_mode);
+			iobuf_cache_ = threads[thread_id].iobuf_cache;
 		}
 		slab_free(iobuf_cache_, io);
 		sbuf->io = NULL;
@@ -972,8 +972,8 @@ static bool allocate_iobuf(SBuf *sbuf)
 	if (sbuf->io == NULL) {
 		struct Slab *iobuf_cache_ = iobuf_cache;
 		if(multithread_mode){
-			Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-			iobuf_cache_ = this_thread->iobuf_cache;
+			int thread_id = get_current_thread_id(multithread_mode);
+			iobuf_cache_ = threads[thread_id].iobuf_cache;
 		}
 		sbuf->io = slab_alloc(iobuf_cache_);
 		if (sbuf->io == NULL) {
@@ -1283,6 +1283,11 @@ static bool tls_change_requires_reconnect(struct tls_config *new_server_connect_
 	}
 }
 
+static void tls_setup_cb(struct List *item, void *ctx) {
+	PgPool *pool = container_of(item, PgPool, head);
+	tag_pool_dirty(pool);
+}
+
 bool sbuf_tls_setup(void)
 {
 	int err;
@@ -1373,10 +1378,7 @@ bool sbuf_tls_setup(void)
 		PgPool *pool;
 		if(multithread_mode){
 			FOR_EACH_THREAD(thread_id){
-				statlist_for_each(item, &(threads[thread_id].pool_list)) {
-					pool = container_of(item, PgPool, head);
-					tag_pool_dirty(pool);
-				}
+				thread_safe_statlist_iterate(&(threads[thread_id].pool_list), tls_setup_cb, NULL);
 			}
 		}else{
 			statlist_for_each(item, &pool_list) {

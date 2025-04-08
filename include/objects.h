@@ -16,6 +16,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+extern struct ThreadSafeStatList thread_safe_user_list;
 extern struct StatList user_list;
 extern struct AATree user_tree;
 extern struct StatList pool_list;
@@ -30,6 +31,8 @@ extern struct Slab *db_cache;
 extern struct Slab *peer_cache;
 extern struct Slab *peer_pool_cache;
 extern struct Slab *pool_cache;
+extern struct ThreadSafeSlab *thread_safe_user_cache;
+extern struct ThreadSafeSlab *thread_safe_credentials_cache;
 extern struct Slab *user_cache;
 extern struct Slab *credentials_cache;
 extern struct Slab *iobuf_cache;
@@ -46,7 +49,7 @@ PgDatabase *find_database(const char *name, int thread_id);
 PgDatabase *find_or_register_database(PgSocket *connection, const char *name, int thread_id);
 PgGlobalUser *find_global_user(const char *name, int thread_id);
 PgCredentials *find_global_credentials(const char *name, int thread_id);
-PgPool *get_pool(PgDatabase *db, PgCredentials *user_credentials);
+PgPool *get_pool(PgDatabase *db, PgCredentials *user_credentials, int thread_id);
 PgPool *get_peer_pool(PgDatabase *);
 PgSocket *compare_connections_by_time(PgSocket *lhs, PgSocket *rhs);
 bool evict_connection(PgDatabase *db)           _MUSTCHECK;

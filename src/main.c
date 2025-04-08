@@ -402,20 +402,25 @@ static bool set_defer_accept(struct CfValue *cv, const char *val)
 	return ok;
 }
 
+static void set_db_dead_cb(struct List *item, void *ctx) {
+	PgDatabase *db;
+	db = container_of(item, PgDatabase, head);
+	bool flag = *(bool *)ctx;
+
+	if (db->admin)
+		return;
+	if (db->db_auto)
+		return;
+	db->db_dead = flag;
+}
+
 static void set_dbs_dead(bool flag)
 {
 	struct List *item;
 	PgDatabase *db;
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
-			statlist_for_each(item, &(threads[thread_id].database_list)) {
-				db = container_of(item, PgDatabase, head);
-				if (db->admin)
-					continue;
-				if (db->db_auto)
-					continue;
-				db->db_dead = flag;
-			}
+			thread_safe_statlist_iterate(&(threads[thread_id].database_list), set_db_dead_cb, &flag);
 		}
 	}else{
 		statlist_for_each(item, &database_list) {
@@ -636,16 +641,30 @@ static void write_pidfile(void)
 	atexit(remove_pidfile);
 }
 
+static void count_fd_cb(struct List *item, void *ctx) {
+    PgDatabase *db = container_of(item, PgDatabase, head);
+	struct {
+        int *fd_cnt;
+        int total_users;
+    } *data = (struct { int *fd_cnt; int total_users; } *)ctx;
+    int *fd_cnt = data->fd_cnt;
+    int total_users = data->total_users;
+    if (db->forced_user_credentials)
+        *fd_cnt += (db->pool_size >= 0 ? db->pool_size : cf_default_pool_size);
+	else
+		*fd_cnt += (db->pool_size >= 0 ? db->pool_size : cf_default_pool_size) * total_users;
+}
+
 /* just print out max files, in the future may warn if something is off */
 static void check_limits(void)
 {
 	struct rlimit lim;
 	int total_users = 0;
+
 	if(multithread_mode){
-		FOR_EACH_THREAD(thread_id){
-			total_users += statlist_count(&(threads[thread_id].user_list));
-		}
-	}else{
+		// TODO(beihao): implement`
+		total_users = statlist_count(&user_list);
+	} else {
 		total_users = statlist_count(&user_list);
 	}
 
@@ -667,17 +686,15 @@ static void check_limits(void)
 
 	/* calculate theoretical max, +10 is just in case */
 	fd_count = cf_max_client_conn + 10;
+	struct {
+		int *fd_count;
+		int total_users;
+	} ctx = { &fd_count, total_users };
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
-			statlist_for_each(item, &(threads[thread_id].database_list)) {
-				db = container_of(item, PgDatabase, head);
-				if (db->forced_user_credentials)
-					fd_count += (db->pool_size >= 0 ? db->pool_size : cf_default_pool_size);
-				else
-					fd_count += (db->pool_size >= 0 ? db->pool_size : cf_default_pool_size) * total_users;
-			}
+			thread_safe_statlist_iterate(&(threads[thread_id].database_list), count_fd_cb, &ctx);
 		}
-	}else{
+	} else {
 		statlist_for_each(item, &database_list) {
 			db = container_of(item, PgDatabase, head);
 			if (db->forced_user_credentials)
@@ -968,7 +985,11 @@ int main(int argc, char *argv[])
 	if (getuid() == 0)
 		die("PgBouncer should not run as root");
 	
-	if(!multithread_mode){
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			admin_setup();
+		}
+	} else {
 		admin_setup();
 	}
 

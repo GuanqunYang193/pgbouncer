@@ -695,11 +695,10 @@ static void disable_users(void)
 	struct List *item;
 	if (multithread_mode)
 	{
-		FOR_EACH_THREAD(thread_id){
-			statlist_for_each(item, &(threads[thread_id].user_list)) {
-				PgGlobalUser *user = container_of(item, PgGlobalUser, head);
-				user->credentials.passwd[0] = 0;
-			}
+		// TODO(beihao): implement
+		statlist_for_each(item, &user_list) {
+			PgGlobalUser *user = container_of(item, PgGlobalUser, head);
+			user->credentials.passwd[0] = 0;
 		}
 	}else{
 		statlist_for_each(item, &user_list) {
@@ -774,13 +773,14 @@ bool load_auth_file(const char *fn)
 		*p++ = 0;	/* tag password end */
 
 		/* send them away */
-		if(multithread_mode){
-			FOR_EACH_THREAD(thread_id){
-				unquote_add_authfile_user(user, password, thread_id);
-			}
-		}else{
-			unquote_add_authfile_user(user, password, -1);
-		}
+		// if(multithread_mode){
+		// 	log_info("load_auth_file 2");
+		// 	FOR_EACH_THREAD(thread_id){
+		// 		unquote_add_authfile_user(user, password, thread_id);
+		// 	}
+		// }else{
+		unquote_add_authfile_user(user, password, -1);
+		// }
 		/* skip rest of the line */
 		while (*p && *p != '\n') p++;
 	}

@@ -179,13 +179,14 @@ static void start_auth_query(PgSocket *client, const char *username)
 {
 	int res;
 	PktBuf *buf;
+	int thread_id = get_current_thread_id(multithread_mode);
 	const char *auth_query = client->db->auth_query ? client->db->auth_query : cf_auth_query;
 
 	/* have to fetch user info from db */
 	PgDatabase *auth_db = prepare_auth_database(client);
 	if (!auth_db)
 		return;
-	client->pool = get_pool(auth_db, client->db->auth_user_credentials);
+	client->pool = get_pool(auth_db, client->db->auth_user_credentials, thread_id);
 	if (!client->pool) {
 		disconnect_client(client, true, "no memory for authentication pool");
 		return;
@@ -331,6 +332,7 @@ static bool finish_set_pool(PgSocket *client, bool takeover)
 	bool ok = false;
 	int auth;
 	struct HBARule *rule = NULL;
+	int thread_id = get_current_thread_id(multithread_mode);
 
 	if (!client->login_user_credentials->mock_auth && !client->db->fake) {
 		PgCredentials *pool_user_credentials;
@@ -340,7 +342,7 @@ static bool finish_set_pool(PgSocket *client, bool takeover)
 		else
 			pool_user_credentials = client->login_user_credentials;
 
-		client->pool = get_pool(client->db, pool_user_credentials);
+		client->pool = get_pool(client->db, pool_user_credentials, thread_id);
 		if (!client->pool) {
 			disconnect_client(client, true, "no memory for pool");
 			return false;

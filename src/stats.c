@@ -368,8 +368,8 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 	struct StatList* pool_list_ptr = &pool_list;
 	int thread_id = -1;
 	if(multithread_mode){
-		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		pool_list_ptr = &this_thread->pool_list;
+		thread_id = get_current_thread_id(multithread_mode);
+		pool_list_ptr = &threads[thread_id].pool_list;
 	}
 
 	statlist_for_each(item, pool_list_ptr) {
@@ -488,8 +488,8 @@ void stats_setup(void)
 	struct event* ev_stats_ptr = &ev_stats;
 	if(multithread_mode){
 		base = (struct event_base *)pthread_getspecific(event_base_key);
-		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
-		ev_stats_ptr = &(this_thread->ev_stats);
+		int thread_id = get_current_thread_id(multithread_mode);
+		ev_stats_ptr = &(threads[thread_id].ev_stats);
 	}
 
 	event_assign(ev_stats_ptr, base, -1, EV_PERSIST, refresh_stats, NULL);
