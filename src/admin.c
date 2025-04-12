@@ -2312,9 +2312,8 @@ bool admin_post_login(PgSocket *client)
 }
 
 /* init special database and query parsing */
-void admin_setup(void)
+void admin_setup(int thread_id)
 {
-	int thread_id = get_current_thread_id(multithread_mode);
 	PgDatabase *db;
 	PgPool *pool;
 	PgGlobalUser *user;
