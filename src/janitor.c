@@ -25,6 +25,7 @@
 
 #include <usual/slab.h>
 #include <usual/slab_ts.h>
+#include <usual/spinlock.h>
 
 
 /* do full maintenance 3x per second */
@@ -855,8 +856,8 @@ static void move_inactive_to_idle_list_cb(struct List *item, void *ctx){
 		if (db->active_stamp == data->seq)
 			return;
 		db->inactive_time = get_cached_time();
-		thread_safe_statlist_remove((struct ThreadSafeStatList*)data->database_list_ptr, &db->head);
-		thread_safe_statlist_append((struct ThreadSafeStatList*)data->autodatabase_idle_list_ptr, &db->head);
+		statlist_remove(&((struct ThreadSafeStatList*)data->database_list_ptr)->list, &db->head);
+		statlist_append(&((struct ThreadSafeStatList*)data->autodatabase_idle_list_ptr)->list, &db->head);
 	}
 }
 
@@ -944,7 +945,9 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 			struct ThreadSafeStatList* database_list_ptr;
 			struct ThreadSafeStatList* autodatabase_idle_list_ptr;
 		} data = { seq, (struct ThreadSafeStatList*)database_list_ptr, (struct ThreadSafeStatList*)autodatabase_idle_list_ptr };
+		spin_lock_acquire(&((struct ThreadSafeStatList*)autodatabase_idle_list_ptr)->lock);
 		thread_safe_statlist_iterate((struct ThreadSafeStatList*)database_list_ptr, move_inactive_to_idle_list_cb, &data);
+		spin_lock_release(&((struct ThreadSafeStatList*)autodatabase_idle_list_ptr)->lock);
 	} else {
 		statlist_for_each_safe(item, (struct StatList*)database_list_ptr, tmp) {
 			db = container_of(item, PgDatabase, head);
