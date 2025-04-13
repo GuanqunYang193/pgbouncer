@@ -22,3 +22,7 @@ bool admin_database_stats(PgSocket *client, struct StatList *pool_list)  _MUSTCH
 bool admin_database_stats_totals(PgSocket *client, struct StatList *pool_list)  _MUSTCHECK;
 bool admin_database_stats_averages(PgSocket *client, struct StatList *pool_list)  _MUSTCHECK;
 bool show_stat_totals(PgSocket *client, struct StatList *pool_list)  _MUSTCHECK;
+
+bool admin_database_thread_safe_stats(PktBuf *buf, PgSocket *client, struct ThreadSafeStatList *pool_list, int thread_id)  _MUSTCHECK;
+bool admin_database_thread_safe_stats_totals(PktBuf *buf, PgSocket *client, struct ThreadSafeStatList *pool_list, int thread_id)  _MUSTCHECK;
+bool admin_database_thread_safe_stats_averages(PktBuf *buf, PgSocket *client, struct ThreadSafeStatList *pool_list, int thread_id)  _MUSTCHECK;

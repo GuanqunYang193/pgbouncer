@@ -118,6 +118,25 @@ static void write_stats(PktBuf *buf, PgStats *stat, PgStats *old, char *dbname)
 			     avg.ps_server_parse_count, avg.ps_bind_count);
 }
 
+static void write_stats_thread_safe(PktBuf *buf, PgStats *stat, PgStats *old, char *dbname, int thread_id)
+{
+	PgStats avg;
+	calc_average(&avg, stat, old);
+	pktbuf_write_DataRow(buf, "NsNNNNNNNNNNNNNNNNNNNNNN", thread_id, dbname,
+			     stat->server_assignment_count,
+			     stat->xact_count, stat->query_count,
+			     stat->client_bytes, stat->server_bytes,
+			     stat->xact_time, stat->query_time,
+			     stat->wait_time, stat->ps_client_parse_count,
+			     stat->ps_server_parse_count, stat->ps_bind_count,
+			     avg.server_assignment_count,
+			     avg.xact_count, avg.query_count,
+			     avg.client_bytes, avg.server_bytes,
+			     avg.xact_time, avg.query_time,
+			     avg.wait_time, avg.ps_client_parse_count,
+			     avg.ps_server_parse_count, avg.ps_bind_count);
+}
+
 bool admin_database_stats(PgSocket *client, struct StatList *pool_list)
 {
 	PgPool *pool;
@@ -173,9 +192,86 @@ bool admin_database_stats(PgSocket *client, struct StatList *pool_list)
 	return true;
 }
 
+static void admin_database_thread_safe_stats_cb(struct List *item, void *ctx)
+{
+	PgPool *pool = container_of(item, PgPool, head);
+	pool = container_of(item, PgPool, head);
+
+	struct {
+		PgDatabase *cur_db;
+		PgStats *st_db, *old_db;
+		PktBuf *buf;
+		int thread_id;
+	} *data = ctx;
+
+	if (!data->cur_db)
+		data->cur_db = pool->db;
+
+	if (pool->db != data->cur_db) {
+		write_stats_thread_safe(data->buf, data->st_db, data->old_db, data->cur_db->name, data->thread_id);
+
+		data->cur_db = pool->db;
+		reset_stats(data->st_db);
+		reset_stats(data->old_db);
+	}
+
+	stat_add(data->st_db, &pool->stats);
+	stat_add(data->old_db, &pool->older_stats);
+}
+
+bool admin_database_thread_safe_stats(PktBuf *buf, PgSocket *client, struct ThreadSafeStatList *pool_list, int thread_id)
+{
+	PgDatabase *cur_db = NULL;
+	PgStats st_db, old_db;
+
+	reset_stats(&st_db);
+	reset_stats(&old_db);
+
+	pktbuf_write_RowDescription(buf, "NsNNNNNNNNNNNNNNNNNNNNNN", 
+					"thread_id", "database",
+				    "total_server_assignment_count",
+				    "total_xact_count", "total_query_count",
+				    "total_received", "total_sent",
+				    "total_xact_time", "total_query_time",
+				    "total_wait_time", "total_client_parse_count",
+				    "total_server_parse_count", "total_bind_count",
+				    "avg_server_assignment_count",
+				    "avg_xact_count", "avg_query_count",
+				    "avg_recv", "avg_sent",
+				    "avg_xact_time", "avg_query_time",
+				    "avg_wait_time", "avg_client_parse_count",
+				    "avg_server_parse_count", "avg_bind_count");
+
+	struct {
+		PgDatabase *cur_db;
+		PgStats *st_db, *old_db;
+		PktBuf *buf;
+		int thread_id;
+	} data = {cur_db, &st_db, &old_db, buf, thread_id};
+
+	thread_safe_statlist_iterate(pool_list, admin_database_thread_safe_stats_cb, &data);
+
+	if (cur_db) {
+		write_stats_thread_safe(data.buf, data.st_db, data.old_db, data.cur_db->name, thread_id);
+	}
+
+	return true;
+}
+
 static void write_stats_totals(PktBuf *buf, PgStats *stat, PgStats *old, char *dbname)
 {
 	pktbuf_write_DataRow(buf, "sNNNNNNNNNNN", dbname,
+			     stat->server_assignment_count,
+			     stat->xact_count, stat->query_count,
+			     stat->client_bytes, stat->server_bytes,
+			     stat->xact_time, stat->query_time,
+			     stat->wait_time, stat->ps_client_parse_count,
+			     stat->ps_server_parse_count, stat->ps_bind_count);
+}
+
+static void write_stats_totals_thread_safe(PktBuf *buf, PgStats *stat, PgStats *old, char *dbname, int thread_id)
+{
+	pktbuf_write_DataRow(buf, "NsNNNNNNNNNNN", thread_id, dbname,
 			     stat->server_assignment_count,
 			     stat->xact_count, stat->query_count,
 			     stat->client_bytes, stat->server_bytes,
@@ -233,6 +329,65 @@ bool admin_database_stats_totals(PgSocket *client, struct StatList *pool_list)
 	return true;
 }
 
+static void admin_database_thread_safe_stats_totals_cb(struct List *item, void *ctx)
+{
+	PgPool *pool = container_of(item, PgPool, head);
+
+	struct {
+		PgDatabase *cur_db;
+		PgStats *st_db, *old_db;
+		PktBuf *buf;
+		int thread_id;
+	} *data = ctx;
+	
+
+	if (!data->cur_db)
+		data->cur_db = pool->db;
+
+	if (pool->db != data->cur_db) {
+		write_stats_totals_thread_safe(data->buf, data->st_db, data->old_db, data->cur_db->name, data->thread_id);
+
+		data->cur_db = pool->db;
+		reset_stats(data->st_db);
+		reset_stats(data->old_db);
+	}
+
+	stat_add(data->st_db, &pool->stats);
+	stat_add(data->old_db, &pool->older_stats);
+}
+
+bool admin_database_thread_safe_stats_totals(PktBuf *buf, PgSocket *client, struct ThreadSafeStatList *pool_list, int thread_id)
+{
+	PgDatabase *cur_db = NULL;
+	PgStats st_db, old_db;
+
+	reset_stats(&st_db);
+	reset_stats(&old_db);
+
+	pktbuf_write_RowDescription(buf, "NsNNNNNNNNNNN", "thread_id", "database",
+				    "server_assignment_count",
+				    "xact_count", "query_count",
+				    "bytes_received", "bytes_sent",
+				    "xact_time", "query_time",
+				    "wait_time", "client_parse_count",
+				    "server_parse_count", "bind_count");
+					
+	struct {
+		PgDatabase *cur_db;
+		PgStats *st_db, *old_db;
+		PktBuf *buf;
+		int thread_id;
+	} data = {cur_db, &st_db, &old_db, buf, thread_id};
+
+	thread_safe_statlist_iterate(pool_list, admin_database_thread_safe_stats_totals_cb, &data);
+
+	if (cur_db) {
+		write_stats_totals_thread_safe(data.buf, data.st_db, data.old_db, data.cur_db->name, thread_id);
+	}
+
+	return true;
+}
+
 static void write_stats_averages(PktBuf *buf, PgStats *stat, PgStats *old, char *dbname)
 {
 	PgStats avg;
@@ -245,6 +400,19 @@ static void write_stats_averages(PktBuf *buf, PgStats *stat, PgStats *old, char 
 			     avg.wait_time, avg.ps_client_parse_count,
 			     avg.ps_server_parse_count, avg.ps_bind_count);
 }
+
+static void write_stats_averages_thread_safe(PktBuf *buf, PgStats *stat, PgStats *old, char *dbname, int thread_id)
+{
+	PgStats avg;
+	calc_average(&avg, stat, old);
+	pktbuf_write_DataRow(buf, "NsNNNNNNNNNNN", thread_id, dbname,
+			     avg.server_assignment_count,
+			     avg.xact_count, avg.query_count,
+			     avg.client_bytes, avg.server_bytes,
+			     avg.xact_time, avg.query_time,
+			     avg.wait_time, avg.ps_client_parse_count,
+			     avg.ps_server_parse_count, avg.ps_bind_count);
+} 	
 
 bool admin_database_stats_averages(PgSocket *client, struct StatList *pool_list)
 {
@@ -291,6 +459,64 @@ bool admin_database_stats_averages(PgSocket *client, struct StatList *pool_list)
 		write_stats_averages(buf, &st_db, &old_db, cur_db->name);
 	}
 	admin_flush(client, buf, "SHOW");
+
+	return true;
+}
+
+static void admin_database_thread_safe_stats_averages_cb(struct List *item, void *ctx)
+{
+	PgPool *pool = container_of(item, PgPool, head);
+
+	struct {
+		PgDatabase *cur_db;
+		PgStats *st_db, *old_db;
+		PktBuf *buf;
+		int thread_id;
+	} *data = ctx;
+
+	if (!data->cur_db)
+		data->cur_db = pool->db;
+
+	if (pool->db != data->cur_db) {
+		write_stats_averages_thread_safe(data->buf, data->st_db, data->old_db, data->cur_db->name, data->thread_id);
+
+		data->cur_db = pool->db;
+		reset_stats(data->st_db);
+		reset_stats(data->old_db);
+	}
+
+	stat_add(data->st_db, &pool->stats);
+	stat_add(data->old_db, &pool->older_stats);
+}
+
+bool admin_database_thread_safe_stats_averages(PktBuf *buf, PgSocket *client, struct ThreadSafeStatList *pool_list, int thread_id)
+{
+	PgDatabase *cur_db = NULL;
+	PgStats st_db, old_db;
+
+	reset_stats(&st_db);
+	reset_stats(&old_db);
+
+	pktbuf_write_RowDescription(buf, "NsNNNNNNNNNNN", "thread_id", "database",
+				    "server_assignment_count",
+				    "xact_count", "query_count",
+				    "bytes_received", "bytes_sent",
+				    "xact_time", "query_time",
+				    "wait_time", "avg_client_parse_count",
+				    "avg_server_parse_count", "avg_bind_count");
+					
+	struct {
+		PgDatabase *cur_db;
+		PgStats *st_db, *old_db;
+		PktBuf *buf;
+		int thread_id;
+	} data = {cur_db, &st_db, &old_db, buf, thread_id};
+
+	thread_safe_statlist_iterate(pool_list, admin_database_thread_safe_stats_averages_cb, &data);
+
+	if (cur_db) {
+		write_stats_averages_thread_safe(data.buf, data.st_db, data.old_db, data.cur_db->name, thread_id);
+	}
 
 	return true;
 }

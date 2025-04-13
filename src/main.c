@@ -987,10 +987,10 @@ int main(int argc, char *argv[])
 	
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
-			admin_setup();
+			admin_setup(thread_id);
 		}
 	} else {
-		admin_setup();
+		admin_setup(-1);
 	}
 
 	if (cf_reboot) {

@@ -625,6 +625,7 @@ static void show_one_database_cb(struct List *item, void *ctx) {
         int thread_id;
     } *data = ctx;
 
+	log_info("[show_one_database_cb] thread_id: %d, db->name: %s", data->thread_id, db->name);
     show_one_database(data->thread_id, db, data->buf, data->cv, data->load_balance_hosts_lookup);
 }
 
@@ -661,8 +662,10 @@ static bool admin_show_databases(PgSocket *admin, const char *arg)
 		} data = { buf, &cv, &load_balance_hosts_lookup, 0 };
 		FOR_EACH_THREAD(thread_id){
 			data.thread_id = thread_id;
+			log_info("[admin_show_databases] thread_id: %d start", thread_id);
 			thread_safe_statlist_iterate(&(threads[thread_id].database_list), 
 				show_one_database_cb, &data);
+			log_info("[admin_show_databases] thread_id: %d end", thread_id);
 		}
 	} else {
 		statlist_for_each(item, &database_list) {
@@ -2044,12 +2047,21 @@ static bool admin_show_version(PgSocket *admin, const char *arg)
 
 static bool admin_show_stats(PgSocket *admin, const char *arg)
 {
+	
 	if (multithread_mode) {
+		PktBuf *buf;
 		bool res = true;
-		FOR_EACH_THREAD(thread_id){
-			// TODO(beihao): thread safe version
-			res &= admin_database_stats(admin, &threads[thread_id].pool_list);
+
+		buf = pktbuf_dynamic(512);
+		if (!buf) {
+			admin_error(admin, "no mem");
+			return true;
 		}
+
+		FOR_EACH_THREAD(thread_id){
+			res &= admin_database_thread_safe_stats(buf, admin, &threads[thread_id].pool_list, thread_id);
+		}
+		admin_flush(admin, buf, "SHOW");
 		return res;
 	}
 
@@ -2059,26 +2071,45 @@ static bool admin_show_stats(PgSocket *admin, const char *arg)
 static bool admin_show_stats_totals(PgSocket *admin, const char *arg)
 {
 	if (multithread_mode) {
+		PktBuf *buf;
 		bool res = true;
-		FOR_EACH_THREAD(thread_id){
-			// TODO(beihao): thread safe version
-			res &= admin_database_stats_totals(admin, &(threads[thread_id].pool_list));
+
+		buf = pktbuf_dynamic(512);
+		if (!buf) {
+			admin_error(admin, "no mem");
+			return true;
 		}
+
+		FOR_EACH_THREAD(thread_id){
+			res &= admin_database_thread_safe_stats_totals(buf, admin, &threads[thread_id].pool_list, thread_id);
+		}
+		admin_flush(admin, buf, "SHOW");
 		return res;
 	}
+
 	return admin_database_stats_totals(admin, &pool_list);
 }
 
 static bool admin_show_stats_averages(PgSocket *admin, const char *arg)
 {
+
 	if (multithread_mode) {
+		PktBuf *buf;
 		bool res = true;
-		FOR_EACH_THREAD(thread_id){
-			// TODO(beihao): thread safe version
-			res &= admin_database_stats_averages(admin, &(threads[thread_id].pool_list));
+
+		buf = pktbuf_dynamic(512);
+		if (!buf) {
+			admin_error(admin, "no mem");
+			return true;
 		}
+
+		FOR_EACH_THREAD(thread_id){
+			res &= admin_database_thread_safe_stats_averages(buf, admin, &threads[thread_id].pool_list, thread_id);
+		}
+		admin_flush(admin, buf, "SHOW");
 		return res;
 	}
+
 	return admin_database_stats_averages(admin, &pool_list);
 }
 
@@ -2109,9 +2140,9 @@ static struct cmd_lookup show_map [] = {
 	{"servers", admin_show_servers},
 	{"sockets", admin_show_sockets},
 	{"active_sockets", admin_show_active_sockets},
-	{"stats", admin_show_stats}, // TODO: check
-	{"stats_totals", admin_show_stats_totals}, // TODO: check
-	{"stats_averages", admin_show_stats_averages}, // TODO: check
+	{"stats", admin_show_stats},
+	{"stats_totals", admin_show_stats_totals},
+	{"stats_averages", admin_show_stats_averages},
 	{"users", admin_show_users},
 	{"version", admin_show_version},
 	{"totals", admin_show_totals}, // TODO: check
@@ -2312,9 +2343,8 @@ bool admin_post_login(PgSocket *client)
 }
 
 /* init special database and query parsing */
-void admin_setup(void)
+void admin_setup(int thread_id)
 {
-	int thread_id = get_current_thread_id(multithread_mode);
 	PgDatabase *db;
 	PgPool *pool;
 	PgGlobalUser *user;
