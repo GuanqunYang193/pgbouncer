@@ -382,7 +382,7 @@ void per_loop_maint(void)
 	}
 
 	int thread_id = get_current_thread_id(multithread_mode);
-	void* pool_list_ptr = GET_LIST(pool_list, thread_id);
+	void* pool_list_ptr = GET_MULTITHREAD_LIST_PTR(pool_list, thread_id);
 
 	if(multithread_mode){
 		struct {
@@ -423,7 +423,7 @@ void per_loop_maint(void)
 		}
 	}
 	
-	struct StatList* login_client_list_ = GET_LIST(login_client_list, thread_id);
+	struct StatList* login_client_list_ = GET_MULTITHREAD_LIST_PTR(login_client_list, thread_id);
 
 	switch (cf_pause_mode) {
 	case P_SUSPEND:
@@ -798,7 +798,7 @@ static void cleanup_inactive_autodatabases(void)
 	if (cf_autodb_idle_timeout <= 0)
 		return;
 	
-	void* autodatabase_idle_list_ptr_ = GET_LIST(autodatabase_idle_list, thread_id);
+	void* autodatabase_idle_list_ptr_ = GET_MULTITHREAD_LIST_PTR(autodatabase_idle_list, thread_id);
 
 	/* now kill the old ones */
 	if(multithread_mode){
@@ -890,11 +890,11 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	 * many users.
 	   _	 */
 	
-	struct StatList* peer_pool_list_ptr = (struct StatList*)GET_LIST(peer_pool_list, thread_id);
+	struct StatList* peer_pool_list_ptr = (struct StatList*)GET_MULTITHREAD_LIST_PTR(peer_pool_list, thread_id);
 
-	void* database_list_ptr = GET_LIST(database_list, thread_id);
-	void* pool_list_ptr = GET_LIST(pool_list, thread_id);
-	void* autodatabase_idle_list_ptr = GET_LIST(autodatabase_idle_list, thread_id);
+	void* database_list_ptr = GET_MULTITHREAD_LIST_PTR(database_list, thread_id);
+	void* pool_list_ptr = GET_MULTITHREAD_LIST_PTR(pool_list, thread_id);
+	void* autodatabase_idle_list_ptr = GET_MULTITHREAD_LIST_PTR(autodatabase_idle_list, thread_id);
 
 	/*
 	 * Creating new pools to enable `min_pool_size` enforcement even if
@@ -1092,9 +1092,9 @@ void kill_database(PgDatabase *db, int thread_id)
 	PgPool *pool;
 	struct List *item, *tmp;
 
-	void* autodatabase_idle_list_ptr = GET_LIST(autodatabase_idle_list, thread_id);
-	void* database_list_ptr = GET_LIST(database_list, thread_id);
-	void* db_cache_ = GET_CACHE(db_cache, thread_id);
+	void* autodatabase_idle_list_ptr = GET_MULTITHREAD_LIST_PTR(autodatabase_idle_list, thread_id);
+	void* database_list_ptr = GET_MULTITHREAD_LIST_PTR(database_list, thread_id);
+	void* db_cache_ = GET_MULTITHREAD_CACHE_PTR(db_cache, thread_id);
 
 	log_warning("dropping database '%s' as it does not exist anymore or inactive auto-database", db->name);
 

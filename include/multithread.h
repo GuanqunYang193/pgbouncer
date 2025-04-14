@@ -13,10 +13,10 @@
 	     (id)++)                    
 
 
-#define GET_LIST(name, thread_id) \
+#define GET_MULTITHREAD_LIST_PTR(name, thread_id) \
 	(multithread_mode ? (void *)&(threads[thread_id].name) : (void *)&name)
 
-#define GET_CACHE(name, thread_id) \
+#define GET_MULTITHREAD_CACHE_PTR(name, thread_id) \
 	(multithread_mode ? (void *)(threads[thread_id].name) : (void *)(name))
 
 

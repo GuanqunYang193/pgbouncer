@@ -143,7 +143,7 @@ static void construct_client(void *obj)
 	sbuf_init(&client->sbuf, client_proto);
 
 	int thread_id = get_current_thread_id(multithread_mode);
-	void *var_list_cache_ptr = GET_CACHE(var_list_cache, thread_id);
+	void *var_list_cache_ptr = GET_MULTITHREAD_CACHE_PTR(var_list_cache, thread_id);
 
 	client->vars.var_list = multithread_mode 
 		? thread_safe_slab_alloc((struct ThreadSafeSlab *)var_list_cache_ptr) 
@@ -162,7 +162,7 @@ static void construct_server(void *obj)
 	sbuf_init(&server->sbuf, server_proto);
 
 	int thread_id = get_current_thread_id(multithread_mode);
-	void *var_list_cache_ptr = GET_CACHE(var_list_cache, thread_id);
+	void *var_list_cache_ptr = GET_MULTITHREAD_CACHE_PTR(var_list_cache, thread_id);
 
 	server->vars.var_list = multithread_mode 
 		? thread_safe_slab_alloc((struct ThreadSafeSlab *)var_list_cache_ptr) 
@@ -324,8 +324,8 @@ void init_caches_multithread(void)
 static void client_free(PgSocket *client)
 {
 	int thread_id = get_current_thread_id(multithread_mode);
-	void * var_list_cache_ = GET_CACHE(var_list_cache, thread_id);
-	struct Slab * client_cache_ = (struct Slab *)GET_CACHE(client_cache, thread_id);
+	void * var_list_cache_ = GET_MULTITHREAD_CACHE_PTR(var_list_cache, thread_id);
+	struct Slab * client_cache_ = (struct Slab *)GET_MULTITHREAD_CACHE_PTR(client_cache, thread_id);
 
 	free_client_prepared_statements(client);
 	varcache_clean(&client->vars);
@@ -343,9 +343,9 @@ static void server_free(PgSocket *server)
 	int thread_id = get_current_thread_id(multithread_mode);
 	struct List *el, *tmp_l;
 	OutstandingRequest *request;
-	struct Slab *outstanding_request_cache_ptr = (struct Slab *)GET_CACHE(outstanding_request_cache, thread_id);
-	void *var_list_cache_ptr = GET_CACHE(var_list_cache, thread_id);
-	struct Slab *server_cache_ptr = (struct Slab *)GET_CACHE(server_cache, thread_id);
+	struct Slab *outstanding_request_cache_ptr = (struct Slab *)GET_MULTITHREAD_CACHE_PTR(outstanding_request_cache, thread_id);
+	void *var_list_cache_ptr = GET_MULTITHREAD_CACHE_PTR(var_list_cache, thread_id);
+	struct Slab *server_cache_ptr = (struct Slab *)GET_MULTITHREAD_CACHE_PTR(server_cache, thread_id);
 
 	statlist_for_each_safe(el, &server->outstanding_requests, tmp_l) {
 		request = container_of(el, OutstandingRequest, node);
@@ -371,8 +371,8 @@ void change_client_state(PgSocket *client, SocketState newstate)
 {
 	int thread_id = get_current_thread_id(multithread_mode);
 	PgPool *pool = client->pool;
-	struct StatList* justfree_client_list_ptr = (struct StatList *)GET_LIST(justfree_client_list, thread_id);
-	struct StatList* login_client_list_ptr = (struct StatList *)GET_LIST(login_client_list, thread_id);
+	struct StatList* justfree_client_list_ptr = (struct StatList *)GET_MULTITHREAD_LIST_PTR(justfree_client_list, thread_id);
+	struct StatList* login_client_list_ptr = (struct StatList *)GET_MULTITHREAD_LIST_PTR(login_client_list, thread_id);
 	/* remove from old location */
 	switch (client->state) {
 	case CL_FREE:
@@ -443,7 +443,7 @@ void change_server_state(PgSocket *server, SocketState newstate)
 	PgPool *pool = server->pool;
 
 	int thread_id = get_current_thread_id(multithread_mode);
-	struct StatList* justfree_server_list_ptr = (struct StatList *)GET_LIST(justfree_server_list, thread_id);
+	struct StatList* justfree_server_list_ptr = (struct StatList *)GET_MULTITHREAD_LIST_PTR(justfree_server_list, thread_id);
 	/* remove from old location */
 	switch (server->state) {
 	case SV_FREE:
@@ -653,8 +653,8 @@ PgDatabase *add_peer(const char *name, int peer_id)
 PgDatabase *add_database(const char *name, int thread_id)
 {
 	PgDatabase *db = find_database(name, thread_id);
-	void* db_cache_ = GET_CACHE(db_cache, thread_id);
-	void* database_list_ = GET_LIST(database_list, thread_id);
+	void* db_cache_ = GET_MULTITHREAD_CACHE_PTR(db_cache, thread_id);
+	void* database_list_ = GET_MULTITHREAD_LIST_PTR(database_list, thread_id);
 
 	/* create new object if needed */
 	if (db == NULL) {
@@ -885,8 +885,8 @@ PgDatabase *find_database(const char *name, int thread_id)
 	PgDatabase *db = NULL;
 	struct List *item, *tmp;
 
-	void *database_list_ = GET_LIST(database_list, thread_id);
-	void *autodatabase_idle_list_ = GET_LIST(autodatabase_idle_list, thread_id);
+	void *database_list_ = GET_MULTITHREAD_LIST_PTR(database_list, thread_id);
+	void *autodatabase_idle_list_ = GET_MULTITHREAD_LIST_PTR(autodatabase_idle_list, thread_id);
 
 	if (multithread_mode) {
 		struct {
@@ -969,9 +969,9 @@ PgCredentials *find_global_credentials(const char *name, int thread_id)
 /* create new pool object */
 static PgPool *new_pool(PgDatabase *db, PgCredentials *user_credentials, int thread_id)
 {
-	void *pool_cache_ptr = GET_CACHE(pool_cache, thread_id);
-	void *var_list_cache_ptr = GET_CACHE(var_list_cache, thread_id);
-	void *pool_list_ptr = GET_LIST(pool_list, thread_id);
+	void *pool_cache_ptr = GET_MULTITHREAD_CACHE_PTR(pool_cache, thread_id);
+	void *var_list_cache_ptr = GET_MULTITHREAD_CACHE_PTR(var_list_cache, thread_id);
+	void *pool_list_ptr = GET_MULTITHREAD_LIST_PTR(pool_list, thread_id);
 	PgPool *pool = multithread_mode 
 		? thread_safe_slab_alloc((struct ThreadSafeSlab *)pool_cache_ptr) 
 		: slab_alloc((struct Slab *)pool_cache_ptr);
@@ -1027,9 +1027,9 @@ static PgPool *new_peer_pool(PgDatabase *db)
 	PgPool *pool;
 	int thread_id = get_current_thread_id(multithread_mode);
 
-	void *peer_pool_cache_ptr = GET_CACHE(peer_pool_cache, thread_id);
-	void *var_list_cache_ptr = GET_CACHE(var_list_cache, thread_id);
-	void *peer_pool_list_ptr = GET_LIST(peer_pool_list, thread_id);
+	void *peer_pool_cache_ptr = GET_MULTITHREAD_CACHE_PTR(peer_pool_cache, thread_id);
+	void *var_list_cache_ptr = GET_MULTITHREAD_CACHE_PTR(var_list_cache, thread_id);
+	void *peer_pool_list_ptr = GET_MULTITHREAD_LIST_PTR(peer_pool_list, thread_id);
 
 	pool = slab_alloc(peer_pool_cache_ptr);
 	if (!pool)
@@ -1426,7 +1426,7 @@ bool clear_outstanding_requests_until(PgSocket *server, const char types[])
 {
 	struct List *item, *tmp;
 	int thread_id = get_current_thread_id(multithread_mode);
-	struct Slab *outstanding_request_cache_ptr = (struct Slab *)GET_CACHE(outstanding_request_cache, thread_id);
+	struct Slab *outstanding_request_cache_ptr = (struct Slab *)GET_MULTITHREAD_CACHE_PTR(outstanding_request_cache, thread_id);
 
 	statlist_for_each_safe(item, &server->outstanding_requests, tmp) {
 		OutstandingRequest *request = container_of(item, OutstandingRequest, node);
@@ -2251,7 +2251,7 @@ void launch_new_connection(PgPool *pool, bool evict_if_needed)
 	 * once (see top of this function).
 	 */
 	int thread_id = get_current_thread_id(multithread_mode);
-	struct Slab *server_cache_ptr = (struct Slab *)GET_CACHE(server_cache, thread_id);
+	struct Slab *server_cache_ptr = (struct Slab *)GET_MULTITHREAD_CACHE_PTR(server_cache, thread_id);
 
 	if (!statlist_empty(&pool->waiting_cancel_req_list) && max < (2 * pool_pool_size(pool))) {
 		log_debug("launch_new_connection: bypass pool limitations for cancel request");
@@ -2346,7 +2346,7 @@ PgSocket *accept_client(int sock, bool is_unix)
 	bool res;
 	PgSocket *client;
 	int thread_id = get_current_thread_id(multithread_mode);
-	struct Slab *client_cache_ptr = (struct Slab *)GET_CACHE(client_cache, thread_id);
+	struct Slab *client_cache_ptr = (struct Slab *)GET_MULTITHREAD_CACHE_PTR(client_cache, thread_id);
 
 	/* get free PgSocket */
 	client = slab_alloc(client_cache_ptr);
@@ -3083,7 +3083,7 @@ void reuse_just_freed_objects(void)
 	 * Keep open sbufs in justfree lists until successful.
 	 */
 	int thread_id = get_current_thread_id(multithread_mode);
-	struct StatList* justfree_client_list_ptr = GET_LIST(justfree_client_list, thread_id);
+	struct StatList* justfree_client_list_ptr = GET_MULTITHREAD_LIST_PTR(justfree_client_list, thread_id);
 
 	statlist_for_each_safe(item, justfree_client_list_ptr, tmp) {
 		sk = container_of(item, PgSocket, head);
