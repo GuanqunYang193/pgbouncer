@@ -2058,8 +2058,24 @@ static bool admin_show_stats(PgSocket *admin, const char *arg)
 			return true;
 		}
 
+		pktbuf_write_RowDescription(buf, "NsNNNNNNNNNNNNNNNNNNNNNN", 
+					"thread_id", "database",
+				    "total_server_assignment_count",
+				    "total_xact_count", "total_query_count",
+				    "total_received", "total_sent",
+				    "total_xact_time", "total_query_time",
+				    "total_wait_time", "total_client_parse_count",
+				    "total_server_parse_count", "total_bind_count",
+				    "avg_server_assignment_count",
+				    "avg_xact_count", "avg_query_count",
+				    "avg_recv", "avg_sent",
+				    "avg_xact_time", "avg_query_time",
+				    "avg_wait_time", "avg_client_parse_count",
+				    "avg_server_parse_count", "avg_bind_count");
+
+
 		FOR_EACH_THREAD(thread_id){
-			res &= admin_database_thread_safe_stats(buf, admin, &threads[thread_id].pool_list, thread_id);
+			res &= admin_database_stats_thread_safe(buf, admin, &threads[thread_id].pool_list, thread_id);
 		}
 		admin_flush(admin, buf, "SHOW");
 		return res;
@@ -2080,8 +2096,16 @@ static bool admin_show_stats_totals(PgSocket *admin, const char *arg)
 			return true;
 		}
 
+		pktbuf_write_RowDescription(buf, "NsNNNNNNNNNNN", "thread_id", "database",
+				    "server_assignment_count",
+				    "xact_count", "query_count",
+				    "bytes_received", "bytes_sent",
+				    "xact_time", "query_time",
+				    "wait_time", "client_parse_count",
+				    "server_parse_count", "bind_count");
+
 		FOR_EACH_THREAD(thread_id){
-			res &= admin_database_thread_safe_stats_totals(buf, admin, &threads[thread_id].pool_list, thread_id);
+			res &= admin_database_stats_totals_thread_safe(buf, admin, &threads[thread_id].pool_list, thread_id);
 		}
 		admin_flush(admin, buf, "SHOW");
 		return res;
@@ -2103,8 +2127,16 @@ static bool admin_show_stats_averages(PgSocket *admin, const char *arg)
 			return true;
 		}
 
+		pktbuf_write_RowDescription(buf, "NsNNNNNNNNNNN", "thread_id", "database",
+				    "server_assignment_count",
+				    "xact_count", "query_count",
+				    "bytes_received", "bytes_sent",
+				    "xact_time", "query_time",
+				    "wait_time", "avg_client_parse_count",
+				    "avg_server_parse_count", "avg_bind_count");
+
 		FOR_EACH_THREAD(thread_id){
-			res &= admin_database_thread_safe_stats_averages(buf, admin, &threads[thread_id].pool_list, thread_id);
+			res &= admin_database_stats_averages_thread_safe(buf, admin, &threads[thread_id].pool_list, thread_id);
 		}
 		admin_flush(admin, buf, "SHOW");
 		return res;
@@ -2116,11 +2148,21 @@ static bool admin_show_stats_averages(PgSocket *admin, const char *arg)
 static bool admin_show_totals(PgSocket *admin, const char *arg)
 {
 	if (multithread_mode) {
+		PktBuf *buf;
 		bool res = true;
-		FOR_EACH_THREAD(thread_id){
-			// TODO(beihao): thread safe version
-			show_stat_totals(admin, &(threads[thread_id].pool_list));
+
+		buf = pktbuf_dynamic(512);
+		if (!buf) {
+			admin_error(admin, "no mem");
+			return true;
 		}
+
+		pktbuf_write_RowDescription(buf, "NsN", "thread_id", "name", "value");
+
+		FOR_EACH_THREAD(thread_id){
+			res &= show_stat_totals_thread_safe(buf, admin, &threads[thread_id].pool_list, thread_id);
+		}
+		admin_flush(admin, buf, "SHOW");
 		return res;
 	}
 	return show_stat_totals(admin, &pool_list);
@@ -2145,7 +2187,7 @@ static struct cmd_lookup show_map [] = {
 	{"stats_averages", admin_show_stats_averages},
 	{"users", admin_show_users},
 	{"version", admin_show_version},
-	{"totals", admin_show_totals}, // TODO: check
+	{"totals", admin_show_totals},
 	{"mem", admin_show_mem},
 	{"dns_hosts", admin_show_dns_hosts},
 	{"dns_zones", admin_show_dns_zones},

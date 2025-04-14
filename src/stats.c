@@ -219,28 +219,13 @@ static void admin_database_thread_safe_stats_cb(struct List *item, void *ctx)
 	stat_add(data->old_db, &pool->older_stats);
 }
 
-bool admin_database_thread_safe_stats(PktBuf *buf, PgSocket *client, struct ThreadSafeStatList *pool_list, int thread_id)
+bool admin_database_stats_thread_safe(PktBuf *buf, PgSocket *client, struct ThreadSafeStatList *pool_list, int thread_id)
 {
 	PgDatabase *cur_db = NULL;
 	PgStats st_db, old_db;
 
 	reset_stats(&st_db);
 	reset_stats(&old_db);
-
-	pktbuf_write_RowDescription(buf, "NsNNNNNNNNNNNNNNNNNNNNNN", 
-					"thread_id", "database",
-				    "total_server_assignment_count",
-				    "total_xact_count", "total_query_count",
-				    "total_received", "total_sent",
-				    "total_xact_time", "total_query_time",
-				    "total_wait_time", "total_client_parse_count",
-				    "total_server_parse_count", "total_bind_count",
-				    "avg_server_assignment_count",
-				    "avg_xact_count", "avg_query_count",
-				    "avg_recv", "avg_sent",
-				    "avg_xact_time", "avg_query_time",
-				    "avg_wait_time", "avg_client_parse_count",
-				    "avg_server_parse_count", "avg_bind_count");
 
 	struct {
 		PgDatabase *cur_db;
@@ -356,21 +341,13 @@ static void admin_database_thread_safe_stats_totals_cb(struct List *item, void *
 	stat_add(data->old_db, &pool->older_stats);
 }
 
-bool admin_database_thread_safe_stats_totals(PktBuf *buf, PgSocket *client, struct ThreadSafeStatList *pool_list, int thread_id)
+bool admin_database_stats_totals_thread_safe(PktBuf *buf, PgSocket *client, struct ThreadSafeStatList *pool_list, int thread_id)
 {
 	PgDatabase *cur_db = NULL;
 	PgStats st_db, old_db;
 
 	reset_stats(&st_db);
 	reset_stats(&old_db);
-
-	pktbuf_write_RowDescription(buf, "NsNNNNNNNNNNN", "thread_id", "database",
-				    "server_assignment_count",
-				    "xact_count", "query_count",
-				    "bytes_received", "bytes_sent",
-				    "xact_time", "query_time",
-				    "wait_time", "client_parse_count",
-				    "server_parse_count", "bind_count");
 					
 	struct {
 		PgDatabase *cur_db;
@@ -489,21 +466,13 @@ static void admin_database_thread_safe_stats_averages_cb(struct List *item, void
 	stat_add(data->old_db, &pool->older_stats);
 }
 
-bool admin_database_thread_safe_stats_averages(PktBuf *buf, PgSocket *client, struct ThreadSafeStatList *pool_list, int thread_id)
+bool admin_database_stats_averages_thread_safe(PktBuf *buf, PgSocket *client, struct ThreadSafeStatList *pool_list, int thread_id)
 {
 	PgDatabase *cur_db = NULL;
 	PgStats st_db, old_db;
 
 	reset_stats(&st_db);
 	reset_stats(&old_db);
-
-	pktbuf_write_RowDescription(buf, "NsNNNNNNNNNNN", "thread_id", "database",
-				    "server_assignment_count",
-				    "xact_count", "query_count",
-				    "bytes_received", "bytes_sent",
-				    "xact_time", "query_time",
-				    "wait_time", "avg_client_parse_count",
-				    "avg_server_parse_count", "avg_bind_count");
 					
 	struct {
 		PgDatabase *cur_db;
@@ -578,12 +547,69 @@ bool show_stat_totals(PgSocket *client, struct StatList *pool_list)
 	return true;
 }
 
+static void reset_stats_cb(struct List *item, void *ctx) {
+	PgPool *pool = container_of(item, PgPool, head);
+	reset_stats(&pool->stats);
+	reset_stats(&pool->older_stats);
+}
+
+bool show_stat_totals_thread_safe(PktBuf *buf, PgSocket *client, struct ThreadSafeStatList *pool_list, int thread_id) {
+	PgStats st_total, old_total, avg;
+
+	reset_stats(&st_total);
+	reset_stats(&old_total);
+
+	thread_safe_statlist_iterate(pool_list, reset_stats_cb, NULL);
+	calc_average(&avg, &st_total, &old_total);
+
+#define WTOTAL_THREAD_SAFE(name) pktbuf_write_DataRow(buf, "NsN", thread_id, "total_" #name, st_total.name)
+#define WAVG_THREAD_SAFE(name) pktbuf_write_DataRow(buf, "NsN", thread_id, "avg_" #name, avg.name)
+
+	WTOTAL_THREAD_SAFE(server_assignment_count);
+	WTOTAL_THREAD_SAFE(xact_count);
+	WTOTAL_THREAD_SAFE(query_count);
+	WTOTAL_THREAD_SAFE(client_bytes);
+	WTOTAL_THREAD_SAFE(server_bytes);
+	WTOTAL_THREAD_SAFE(xact_time);
+	WTOTAL_THREAD_SAFE(query_time);
+	WTOTAL_THREAD_SAFE(wait_time);
+	WTOTAL_THREAD_SAFE(ps_client_parse_count);
+	WTOTAL_THREAD_SAFE(ps_server_parse_count);
+	WTOTAL_THREAD_SAFE(ps_bind_count);
+	WAVG_THREAD_SAFE(server_assignment_count);
+	WAVG_THREAD_SAFE(xact_count);
+	WAVG_THREAD_SAFE(query_count);
+	WAVG_THREAD_SAFE(client_bytes);
+	WAVG_THREAD_SAFE(server_bytes);
+	WAVG_THREAD_SAFE(xact_time);
+	WAVG_THREAD_SAFE(query_time);
+	WAVG_THREAD_SAFE(wait_time);
+	WAVG_THREAD_SAFE(ps_client_parse_count);
+	WAVG_THREAD_SAFE(ps_server_parse_count);
+	WAVG_THREAD_SAFE(ps_bind_count);
+
+	return true;
+}
+
+static void refresh_stats_cb(struct List *item, void *ctx) {
+	PgPool *pool = container_of(item, PgPool, head);
+	struct {
+		PgStats *old_total, *cur_total;
+	} *data = ctx;
+	pool->older_stats = pool->newer_stats;
+	pool->newer_stats = pool->stats;
+	if (cf_log_stats) {
+		stat_add(data->cur_total, &pool->stats);
+		stat_add(data->old_total, &pool->older_stats);
+	}
+}
+
 static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 {
 	struct List *item;
-	PgPool *pool;
 	PgStats old_total, cur_total;
 	PgStats avg;
+	int thread_id = get_current_thread_id(multithread_mode);
 
 	reset_stats(&old_total);
 	reset_stats(&cur_total);
@@ -591,21 +617,23 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 	old_stamp = new_stamp;
 	new_stamp = get_cached_time();
 
-	struct StatList* pool_list_ptr = &pool_list;
-	int thread_id = -1;
-	if(multithread_mode){
-		thread_id = get_current_thread_id(multithread_mode);
-		pool_list_ptr = &threads[thread_id].pool_list;
-	}
+	void* pool_list_ptr = GET_LIST(pool_list, thread_id);
 
-	statlist_for_each(item, pool_list_ptr) {
-		pool = container_of(item, PgPool, head);
-		pool->older_stats = pool->newer_stats;
-		pool->newer_stats = pool->stats;
+	if (multithread_mode) {
+		struct {
+			PgStats *old_total, *cur_total;
+		} data = {&old_total, &cur_total};
+		thread_safe_statlist_iterate((struct ThreadSafeStatList *)pool_list_ptr, refresh_stats_cb, &data);
+	} else {
+		statlist_for_each(item, (struct StatList *)pool_list_ptr) {
+			PgPool *pool = container_of(item, PgPool, head);
+			pool->older_stats = pool->newer_stats;
+			pool->newer_stats = pool->stats;
 
-		if (cf_log_stats) {
-			stat_add(&cur_total, &pool->stats);
-			stat_add(&old_total, &pool->older_stats);
+			if (cf_log_stats) {
+				stat_add(&cur_total, &pool->stats);
+				stat_add(&old_total, &pool->older_stats);
+			}
 		}
 	}
 	
@@ -613,7 +641,7 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 
 	if(multithread_mode){
 		if (cf_log_stats) {
-			log_info("[Thread %lu] "
+			log_info("[Thread %d] "
 				"stats: %" PRIu64 " xacts/s,"
 				" %" PRIu64 " queries/s,"
 				" %" PRIu64 " client parses/s,"
@@ -636,7 +664,7 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 		}
 
 		sd_notifyf(0,
-			"[Thread %lu] "
+			"[Thread %d] "
 			"STATUS=stats: %" PRIu64 " xacts/s,"
 			" %" PRIu64 " queries/s,"
 			" %" PRIu64 " client parses/s,"
