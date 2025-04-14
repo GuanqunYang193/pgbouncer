@@ -625,7 +625,6 @@ static void show_one_database_cb(struct List *item, void *ctx) {
         int thread_id;
     } *data = ctx;
 
-	log_info("[show_one_database_cb] thread_id: %d, db->name: %s", data->thread_id, db->name);
     show_one_database(data->thread_id, db, data->buf, data->cv, data->load_balance_hosts_lookup);
 }
 
@@ -662,10 +661,8 @@ static bool admin_show_databases(PgSocket *admin, const char *arg)
 		} data = { buf, &cv, &load_balance_hosts_lookup, 0 };
 		FOR_EACH_THREAD(thread_id){
 			data.thread_id = thread_id;
-			log_info("[admin_show_databases] thread_id: %d start", thread_id);
 			thread_safe_statlist_iterate(&(threads[thread_id].database_list), 
 				show_one_database_cb, &data);
-			log_info("[admin_show_databases] thread_id: %d end", thread_id);
 		}
 	} else {
 		statlist_for_each(item, &database_list) {

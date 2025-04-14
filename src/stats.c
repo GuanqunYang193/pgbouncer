@@ -195,7 +195,6 @@ bool admin_database_stats(PgSocket *client, struct StatList *pool_list)
 static void admin_database_thread_safe_stats_cb(struct List *item, void *ctx)
 {
 	PgPool *pool = container_of(item, PgPool, head);
-	pool = container_of(item, PgPool, head);
 
 	struct {
 		PgDatabase *cur_db;
