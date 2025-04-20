@@ -39,8 +39,14 @@ typedef struct SignalEvent{
 #endif
 } SignalEvent;
 
-typedef struct Thread {
+enum ThreadStatus{
+    THREAD_RUNNING,
+    THREAD_REQUEST_PAUSE,
+    THREAD_PAUSED,
+};
 
+typedef struct Thread {
+    enum ThreadStatus thread_status;
     pthread_t worker;
     int thread_id;
     struct event full_maint_ev;
@@ -94,6 +100,7 @@ typedef struct ClientRequest {
     bool is_unix;
 } ClientRequest;
 
+
 extern Thread *threads;
 extern int next_thread;
 
@@ -102,4 +109,6 @@ void start_threads();
 void init_threads();
 int wait_threads();
 void clean_threads();
+void pause_thread(int thread_id);
+void resume_thread(int thread_id);
 int get_current_thread_id(const bool multithread_mode);

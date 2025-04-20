@@ -220,6 +220,15 @@ void* worker_func(void* arg){
 	stats_setup();
 
     while(this_thread->cf_shutdown != SHUTDOWN_IMMEDIATE){
+		if(this_thread->thread_status == THREAD_REQUEST_PAUSE){
+			this_thread->thread_status = THREAD_PAUSED;
+		}
+
+		if(this_thread->thread_status == THREAD_PAUSED){
+			usleep(0.5*USEC);
+			continue;
+		}
+
         int err;
         reset_time_cache();
         err = event_base_loop(base, EVLOOP_ONCE);
@@ -299,6 +308,17 @@ int wait_threads(){
 		free(retval); 
 	}
 	return 0;
+}
+void request_pause_thread(int thread_id){
+	threads[thread_id].thread_status = THREAD_REQUEST_PAUSE;
+}
+
+bool thread_paused(int thread_id){
+	return threads[thread_id].thread_status == THREAD_PAUSED;
+}
+
+void resume_thread(int thread_id){
+	threads[thread_id].thread_status = THREAD_RUNNING;
 }
 
 inline int get_current_thread_id(const bool multithread_mode){
