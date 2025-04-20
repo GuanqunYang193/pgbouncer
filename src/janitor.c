@@ -1040,8 +1040,10 @@ void kill_pool(PgPool *pool, int thread_id)
 
 	list_del(&pool->map_head);
 	if(multithread_mode){
+		// locked
 		thread_safe_statlist_remove(&(threads[thread_id].pool_list), &pool->head);
 		varcache_clean(&pool->orig_vars);
+		// need lock?
 		thread_safe_slab_free(threads[thread_id].var_list_cache, pool->orig_vars.var_list);
 		thread_safe_slab_free(threads[thread_id].pool_cache, pool);
 	}else{

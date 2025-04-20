@@ -2922,6 +2922,7 @@ void tag_pool_dirty(PgPool *pool)
 	pool->welcome_msg_ready = false;
 
 	/* drop all existing servers ASAP */
+	// FIXME 
 	for_each_server(pool, tag_dirty);
 
 	/* drop servers login phase immediately */
@@ -2940,17 +2941,15 @@ static void tag_database_dirty_db(struct List *item, void *ctx) {
 		tag_pool_dirty(pool);
 }
 
-void tag_database_dirty(PgDatabase *db)
+void tag_database_dirty(PgDatabase *db, int thread_id)
 {
 	struct List *item;
 	PgPool *pool;
 	if(multithread_mode){
-		FOR_EACH_THREAD(thread_id){
-			struct {
-				PgDatabase *db;
-			} data = {db};
-			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), tag_database_dirty_db, &data);
-		}
+		struct {
+			PgDatabase *db;
+		} data = {db};
+		thread_safe_statlist_iterate(&(threads[thread_id].pool_list), tag_database_dirty_db, &data);
 	}else{
 		statlist_for_each(item, &pool_list) {
 			pool = container_of(item, PgPool, head);

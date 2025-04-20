@@ -389,6 +389,7 @@ static bool show_one_fd(PgSocket *admin, PgSocket *sk, int thread_id)
 	if (sk->pool && sk->pool->db->auth_user_credentials && sk->login_user_credentials){
 		if 	(multithread_mode){
 			bool user_found = true;
+			// FIXME
 			FOR_EACH_THREAD(thread_id){
 				if(!find_global_user(sk->login_user_credentials->name, thread_id)){
 					user_found = false;
@@ -1635,7 +1636,7 @@ static void reconnect_database(struct List *item, void *ctx) {
 	PgPool *pool = container_of(item, PgPool, head);
 	if (pool->db->admin)
 		return;
-	tag_database_dirty(pool->db);
+	tag_database_dirty(pool->db, get_current_thread_id(multithread_mode));
 }
 
 /* Command: RECONNECT */
@@ -1658,7 +1659,7 @@ static bool admin_cmd_reconnect(PgSocket *admin, const char *arg)
 				pool = container_of(item, PgPool, head);
 				if (pool->db->admin)
 					continue;
-				tag_database_dirty(pool->db);
+				tag_database_dirty(pool->db, get_current_thread_id(multithread_mode));
 			}
 		}
 	} else {
@@ -1679,7 +1680,7 @@ static bool admin_cmd_reconnect(PgSocket *admin, const char *arg)
 			return admin_error(admin, "no such database: %s", arg);
 		if (db == admin->pool->db)
 			return admin_error(admin, "cannot reconnect admin db: %s", arg);
-		tag_database_dirty(db);
+		tag_database_dirty(db, get_current_thread_id(multithread_mode));
 	}
 
 	return admin_ready(admin, "RECONNECT");
@@ -1834,7 +1835,7 @@ static bool admin_cmd_kill_client(PgSocket *admin, const char *arg)
 	return admin_ready(admin, "KILL_CLIENT");
 }
 
-static void kill_database_cb(struct List *item, void *ctx) {
+static void kill_pool_cb(struct List *item, void *ctx) {
 	int thread_id = *(int *)ctx;
 	PgPool *pool = container_of(item, PgPool, head);
 	kill_pool(pool, thread_id);
@@ -1875,7 +1876,7 @@ static bool admin_cmd_kill(PgSocket *admin, const char *arg)
 	db->db_paused = true;
 	if (multithread_mode) {
 		FOR_EACH_THREAD(thread_id){
-			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), kill_database_cb, &thread_id);
+			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), kill_pool_cb, &thread_id);
 		}
 	} else {
 		statlist_for_each_safe(item, &pool_list, tmp) {

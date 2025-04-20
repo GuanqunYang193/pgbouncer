@@ -419,7 +419,7 @@ bool parse_database(void *base, const char *name, const char *connstr, int threa
 			changed = true;
 		}
 		if (changed)
-			tag_database_dirty(db);
+			tag_database_dirty(db,thread_id);
 	}
 
 	free(db->host);
