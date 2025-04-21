@@ -1,6 +1,7 @@
 #include <usual/statlist.h>
 #include <usual/statlist_ts.h>
 #include <usual/aatree.h>
+#include <usual/spinlock.h>
 
 #include <pthread.h>
 #include <event2/event.h>
@@ -40,13 +41,20 @@ typedef struct SignalEvent{
 } SignalEvent;
 
 enum ThreadStatus{
-    THREAD_RUNNING,
-    THREAD_REQUEST_PAUSE,
-    THREAD_PAUSED,
+    THREAD_RUNNING,         // resumed
+    THREAD_REQUEST_PAUSE,   // request sent but not paused
+    THREAD_PAUSED,          // thread confirms paused
 };
 
-typedef struct Thread {
+typedef struct ThreadMetadata{
     enum ThreadStatus thread_status;
+    SpinLock thread_lock;
+} ThreadMetadata;
+
+#define THREAD_PAUSE_SEC 0.5
+
+typedef struct Thread {
+    ThreadMetadata thread_metadata;
     pthread_t worker;
     int thread_id;
     struct event full_maint_ev;
@@ -109,6 +117,9 @@ void start_threads();
 void init_threads();
 int wait_threads();
 void clean_threads();
-void pause_thread(int thread_id);
+void request_pause_thread(int thread_id);
+bool thread_paused(int thread_id);
 void resume_thread(int thread_id);
+void lock_thread(int thread_id);
+void unlock_thread(int thread_id);
 int get_current_thread_id(const bool multithread_mode);

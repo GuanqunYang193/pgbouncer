@@ -213,19 +213,19 @@ void* worker_func(void* arg){
 
     pthread_setspecific(event_base_key, base);
 
-	// admin_setup();
     thread_pooler_setup();
 	signal_setup(base, &(this_thread->signal_event), this_thread->thread_id);
 	janitor_setup();
 	stats_setup();
 
     while(this_thread->cf_shutdown != SHUTDOWN_IMMEDIATE){
-		if(this_thread->thread_status == THREAD_REQUEST_PAUSE){
-			this_thread->thread_status = THREAD_PAUSED;
+		if(this_thread->thread_metadata.thread_status == THREAD_REQUEST_PAUSE){
+			// confirm pause request 
+			this_thread->thread_metadata.thread_status = THREAD_PAUSED;
 		}
 
-		if(this_thread->thread_status == THREAD_PAUSED){
-			usleep(0.5*USEC);
+		if(this_thread->thread_metadata.thread_status == THREAD_PAUSED){
+			usleep(THREAD_PAUSE_SEC*USEC);
 			continue;
 		}
 
@@ -310,15 +310,23 @@ int wait_threads(){
 	return 0;
 }
 void request_pause_thread(int thread_id){
-	threads[thread_id].thread_status = THREAD_REQUEST_PAUSE;
+	threads[thread_id].thread_metadata.thread_status = THREAD_REQUEST_PAUSE;
 }
 
 bool thread_paused(int thread_id){
-	return threads[thread_id].thread_status == THREAD_PAUSED;
+	return threads[thread_id].thread_metadata.thread_status == THREAD_PAUSED;
 }
 
 void resume_thread(int thread_id){
-	threads[thread_id].thread_status = THREAD_RUNNING;
+	threads[thread_id].thread_metadata.thread_status = THREAD_RUNNING;
+}
+
+void lock_thread(int thread_id){
+	spin_lock_acquire(&(threads[thread_id].thread_metadata.thread_lock));
+}
+
+void unlock_thread(int thread_id){
+	spin_lock_release(&(threads[thread_id].thread_metadata.thread_lock));
 }
 
 inline int get_current_thread_id(const bool multithread_mode){
