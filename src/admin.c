@@ -149,21 +149,19 @@ static void count_db_active_cb(struct List *item, void *ctx) {
         *data->cnt += pool_server_count(pool);
 }
 
-static int count_db_active(PgDatabase *db)
+static int count_db_active(PgDatabase *db, int thread_id)
 {
     struct List *item;
 	PgPool *pool;
 	int cnt = 0;
 
-	if (multithread_mode) {
+	if (thread_id!=-1) {
 		struct {
 			PgDatabase *db;
 			int *cnt;
 		} data = { db, &cnt };
-		FOR_EACH_THREAD(thread_id){
-			thread_safe_statlist_iterate(&(threads[thread_id].pool_list),
-				count_db_active_cb, &data);
-		}
+		thread_safe_statlist_iterate(&(threads[thread_id].pool_list),
+			count_db_active_cb, &data);
 	} else {
 		statlist_for_each(item, &pool_list) {
 			pool = container_of(item, PgPool, head);
@@ -926,28 +924,29 @@ static void show_socket_list(PktBuf *buf, struct StatList *list, int thread_id, 
 	}
 }
 
-static void show_client_list(PktBuf *buf, PgPool *pool, int thread_id, bool debug) {
-	show_socket_list(buf, &pool->active_client_list, thread_id, "active", debug);
-	show_socket_list(buf, &pool->waiting_client_list, thread_id, "waiting", debug);
-	show_socket_list(buf, &pool->active_cancel_req_list, thread_id, "active_cancel_req", debug);
-	show_socket_list(buf, &pool->waiting_cancel_req_list, thread_id, "waiting_cancel_req", debug);
-}
+void show_client(PktBuf *buf, struct StatList* pool_list_ptr, struct StatList* peer_pool_list_ptr, int thread_id){
+	struct List *item;
+	PgPool *pool;
+	
+	statlist_for_each(item, pool_list_ptr) {
+		pool = container_of(item, PgPool, head);
+		show_socket_list(buf, &pool->active_client_list, thread_id, "active", false);
+		show_socket_list(buf, &pool->waiting_client_list, thread_id, "waiting", false);
+		show_socket_list(buf, &pool->active_cancel_req_list, thread_id, "active_cancel_req", false);
+		show_socket_list(buf, &pool->waiting_cancel_req_list, thread_id, "waiting_cancel_req", false);
+	}
 
-static void show_clients_cb(struct List *item, void *ctx) {
-	PgPool *pool = container_of(item, PgPool, head);
-	struct {
-		PktBuf *buf; 
-		int thread_id; 
-		bool debug;
-	} *data = ctx;
-	show_client_list(data->buf, pool, data->thread_id, data->debug);
+	statlist_for_each(item, peer_pool_list_ptr) {
+		pool = container_of(item, PgPool, head);
+
+		show_socket_list(buf, &pool->active_cancel_req_list, thread_id, "active_cancel_req", false);
+		show_socket_list(buf, &pool->waiting_cancel_req_list, thread_id, "waiting_cancel_req", false);
+	}
 }
 
 /* Command: SHOW CLIENTS */
 static bool admin_show_clients(PgSocket *admin, const char *arg)
 {
-	struct List *item;
-	PgPool *pool;
 	PktBuf *buf = pktbuf_dynamic(256);
 
 	if (!buf) {
@@ -957,33 +956,14 @@ static bool admin_show_clients(PgSocket *admin, const char *arg)
 
 	socket_header(buf, false);
 	if (multithread_mode) {
+		int current_thread_id = get_current_thread_id(multithread_mode);
 		FOR_EACH_THREAD(thread_id){
-			struct {
-				PktBuf *buf; 
-				int thread_id; 
-				bool debug;
-			} data = {buf, thread_id, false};
-			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), show_clients_cb, &data);
-
-			statlist_for_each(item, &(threads[thread_id].peer_pool_list)) {
-				pool = container_of(item, PgPool, head);
-
-				show_socket_list(buf, &pool->active_cancel_req_list, thread_id, "active_cancel_req", false);
-				show_socket_list(buf, &pool->waiting_cancel_req_list, thread_id, "waiting_cancel_req", false);
-			}
+			lock_and_pause_thread(thread_id);
+			show_client(buf, &(threads[thread_id].pool_list.list), &(threads[thread_id].peer_pool_list), thread_id);
+			unlock_and_resume_thread(thread_id);
 		}
 	} else {
-		statlist_for_each(item, &pool_list) {
-			pool = container_of(item, PgPool, head);
-			show_client_list(buf, pool, -1, false);
-		}
-
-		statlist_for_each(item, &peer_pool_list) {
-			pool = container_of(item, PgPool, head);
-
-			show_socket_list(buf, &pool->active_cancel_req_list, -1, "active_cancel_req", false);
-			show_socket_list(buf, &pool->waiting_cancel_req_list, -1, "waiting_cancel_req", false);
-		}
+		show_client(buf,&pool_list, &peer_list,-1);
 	}	
 
 	admin_flush(admin, buf, "SHOW");
@@ -998,16 +978,6 @@ static void show_server_list(PktBuf *buf, PgPool *pool, int thread_id, bool debu
 	show_socket_list(buf, &pool->new_server_list, thread_id, "new", debug);
 	show_socket_list(buf, &pool->active_cancel_server_list, thread_id, "active_cancel", debug);
 	show_socket_list(buf, &pool->being_canceled_server_list, thread_id, "being_canceled", debug);
-}
-
-static void show_server_list_cb(struct List *item, void *ctx) {
-	PgPool *pool = container_of(item, PgPool, head);
-	struct {
-		PktBuf *buf; 
-		int thread_id; 
-		bool debug;
-	} *data = ctx;
-	show_server_list(data->buf, pool, data->thread_id, data->debug);
 }
 
 /* Command: SHOW SERVERS */
@@ -1026,18 +996,20 @@ static bool admin_show_servers(PgSocket *admin, const char *arg)
 	socket_header(buf, false);
 	if (multithread_mode) {
 		FOR_EACH_THREAD(thread_id){
-			struct {
-				PktBuf *buf; 
-				int thread_id; 
-				bool debug;
-			} data = {buf, thread_id, false};
-			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), show_server_list_cb, &data);
+			lock_and_pause_thread(thread_id);
+			
+			statlist_for_each(item, &pool_list) {
+				pool = container_of(item, PgPool, head);
+				show_server_list(buf, pool, thread_id, false);
+			}
 
 			statlist_for_each(item, &(threads[thread_id].peer_pool_list)) {
 				pool = container_of(item, PgPool, head);
 				show_socket_list(buf, &pool->new_server_list, thread_id, "new", false);
 				show_socket_list(buf, &pool->active_cancel_server_list, thread_id, "active_cancel", false);
 			}
+
+			unlock_and_resume_thread(thread_id);
 		}
 	} else {
 		statlist_for_each(item, &pool_list) {
@@ -1131,14 +1103,6 @@ static void show_active_socket_list_internal(PktBuf *buf, PgPool *pool, int thre
 	show_active_socket_list(buf, &pool->new_server_list, thread_id, "sv_login");
 }
 
-static void show_active_socket_list_cb(struct List *item, void *ctx) {
-	PgPool *pool = container_of(item, PgPool, head);
-	struct {
-		PktBuf *buf; 
-		int thread_id; 
-	} *data = ctx;
-	show_active_socket_list_internal(data->buf, pool, data->thread_id);
-}
 
 /* Command: SHOW ACTIVE_SOCKETS */
 static bool admin_show_active_sockets(PgSocket *admin, const char *arg)
@@ -1156,13 +1120,13 @@ static bool admin_show_active_sockets(PgSocket *admin, const char *arg)
 	socket_header(buf, true);
 	if (multithread_mode) {
 		FOR_EACH_THREAD(thread_id){
-			struct {
-				PktBuf *buf; 
-				int thread_id; 
-			} data = {buf, thread_id};
-
-			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), show_active_socket_list_cb, &data);
+			lock_and_pause_thread(thread_id);
+			statlist_for_each(item, &(threads[thread_id].pool_list.list)) {
+				pool = container_of(item, PgPool, head);
+				show_active_socket_list_internal(buf, pool, thread_id);
+			}
 			show_active_socket_list(buf, &(threads[thread_id].login_client_list), thread_id, "cl_login");
+			unlock_and_resume_thread(thread_id);
 		}
 	} else {
 		statlist_for_each(item, &pool_list) {
@@ -1609,35 +1573,44 @@ static bool admin_cmd_pause(PgSocket *admin, const char *arg)
 		PgDatabase *db;
 		log_info("PAUSE '%s' command issued", arg);
 		if (multithread_mode) {
+			bool paused = true;
+			bool found  = false;
 			FOR_EACH_THREAD(thread_id){
+				lock_and_pause_thread(thread_id);
 				db = find_or_register_database(admin, arg, thread_id);
-				if(db){
-					break;
-				}
+				unlock_and_resume_thread(thread_id);
+				if (db == NULL)
+					continue;
+				found = true;
+				if (db == admin->pool->db)
+					return admin_error(admin, "cannot pause admin db: %s", arg);
+				db->db_paused = true;
+				if (count_db_active(db, thread_id) > 0){
+					admin->wait_for_response = true;
+					paused = false;
+				}	
 			}
+			if(!found)
+				return admin_error(admin, "no such database: %s", arg);
+			if(paused)
+				return admin_ready(admin, "PAUSE");
 		} else {
 			db = find_or_register_database(admin, arg, -1);
+			if (db == NULL)
+				return admin_error(admin, "no such database: %s", arg);
+			if (db == admin->pool->db)
+				return admin_error(admin, "cannot pause admin db: %s", arg);
+			db->db_paused = true;
+			if (count_db_active(db, -1) > 0)
+				admin->wait_for_response = true;
+			else
+				return admin_ready(admin, "PAUSE");
 		}
-		if (db == NULL)
-			return admin_error(admin, "no such database: %s", arg);
-		if (db == admin->pool->db)
-			return admin_error(admin, "cannot pause admin db: %s", arg);
-		db->db_paused = true;
-		if (count_db_active(db) > 0)
-			admin->wait_for_response = true;
-		else
-			return admin_ready(admin, "PAUSE");
 	}
 
 	return true;
 }
 
-static void reconnect_database(struct List *item, void *ctx) {
-	PgPool *pool = container_of(item, PgPool, head);
-	if (pool->db->admin)
-		return;
-	tag_database_dirty(pool->db, get_current_thread_id(multithread_mode));
-}
 
 /* Command: RECONNECT */
 static bool admin_cmd_reconnect(PgSocket *admin, const char *arg)
@@ -1652,14 +1625,21 @@ static bool admin_cmd_reconnect(PgSocket *admin, const char *arg)
 		log_info("RECONNECT command issued");
 		if (multithread_mode) {
 			FOR_EACH_THREAD(thread_id){
-				thread_safe_statlist_iterate(&(threads[thread_id].pool_list), reconnect_database, NULL);
+				lock_and_pause_thread(thread_id);
+				statlist_for_each(item, &(threads[thread_id].pool_list.list)) {
+					pool = container_of(item, PgPool, head);
+					if (pool->db->admin)
+						continue;
+					tag_database_dirty(pool->db, thread_id);
+				}
+				unlock_and_resume_thread(thread_id);
 			}
 		} else {
 			statlist_for_each(item, &pool_list) {
 				pool = container_of(item, PgPool, head);
 				if (pool->db->admin)
 					continue;
-				tag_database_dirty(pool->db, get_current_thread_id(multithread_mode));
+				tag_database_dirty(pool->db, -1);
 			}
 		}
 	} else {
@@ -1667,28 +1647,38 @@ static bool admin_cmd_reconnect(PgSocket *admin, const char *arg)
 
 		log_info("RECONNECT '%s' command issued", arg);
 		if (multithread_mode) {
+			bool found  = false;
 			FOR_EACH_THREAD(thread_id){
+				lock_and_pause_thread(thread_id);
 				db = find_or_register_database(admin, arg, thread_id);
-				if(db){
-					break;
+				if(!db){
+					unlock_and_resume_thread(thread_id);
+					continue;
 				}
+				if (db == admin->pool->db){
+					unlock_and_resume_thread(thread_id);
+					return admin_error(admin, "cannot reconnect admin db: %s", arg);
+				}
+				found = true;
+				tag_database_dirty(db, thread_id);
+				unlock_and_resume_thread(thread_id);
 			}
+			if(!found)
+				return admin_error(admin, "no such database: %s", arg);
 		} else {
 			db = find_or_register_database(admin, arg, -1);
+			if (db == NULL)
+				return admin_error(admin, "no such database: %s", arg);
+			if (db == admin->pool->db)
+				return admin_error(admin, "cannot reconnect admin db: %s", arg);
+			tag_database_dirty(db, -1);
 		}
-		if (db == NULL)
-			return admin_error(admin, "no such database: %s", arg);
-		if (db == admin->pool->db)
-			return admin_error(admin, "cannot reconnect admin db: %s", arg);
-		tag_database_dirty(db, get_current_thread_id(multithread_mode));
 	}
 
 	return admin_ready(admin, "RECONNECT");
 }
 
-/* Command: DISABLE */
-static bool admin_cmd_disable(PgSocket *admin, const char *arg)
-{
+static bool admin_cmd_disable_internal(PgSocket *admin, const char *arg, bool disable){
 	PgDatabase *db;
 
 	if (!admin->admin_user)
@@ -1697,55 +1687,57 @@ static bool admin_cmd_disable(PgSocket *admin, const char *arg)
 	if (!arg[0])
 		return admin_error(admin, "a database is required");
 
-	log_info("DISABLE '%s' command issued", arg);
+	if(disable)
+		log_info("DISABLE '%s' command issued", arg);
+	else
+		log_info("ENABLE '%s' command issued", arg);
+
 	if (multithread_mode) {
+		bool found = false;
 		FOR_EACH_THREAD(thread_id){
+			lock_and_pause_thread(thread_id);
 			db = find_or_register_database(admin, arg, thread_id);
-			if(db){
-				break;
-			}
+			unlock_and_resume_thread(thread_id);
+			if(db)
+				found = true;
+			if (db->admin)
+				if(disable)
+					return admin_error(admin, "cannot disable admin db: %s", arg);
+				else
+					return admin_error(admin, "cannot enable admin db: %s", arg);
+			db->db_disabled = disable;
 		}
+		if(!found)
+			return admin_error(admin, "no such database: %s", arg);
 	} else {
 		db = find_or_register_database(admin, arg, -1);
-	}
-	if (db == NULL)
-		return admin_error(admin, "no such database: %s", arg);
-	if (db->admin)
-		return admin_error(admin, "cannot disable admin db: %s", arg);
+		if (db == NULL)
+			return admin_error(admin, "no such database: %s", arg);
+		if (db->admin)
+			if(disable)
+				return admin_error(admin, "cannot disable admin db: %s", arg);
+			else
+				return admin_error(admin, "cannot enable admin db: %s", arg);
 
-	db->db_disabled = true;
-	return admin_ready(admin, "DISABLE");
+		db->db_disabled = disable;
+	}
+	if(disable)
+		return admin_ready(admin, "DISABLE");
+	else	
+		return admin_ready(admin, "ENABLE");
+}
+
+/* Command: DISABLE */
+static bool admin_cmd_disable(PgSocket *admin, const char *arg)
+{
+	admin_cmd_disable_internal(admin, arg, true);
+	
 }
 
 /* Command: ENABLE */
 static bool admin_cmd_enable(PgSocket *admin, const char *arg)
 {
-	PgDatabase *db;
-
-	if (!admin->admin_user)
-		return admin_error(admin, "admin access needed");
-
-	if (!arg[0])
-		return admin_error(admin, "a database is required");
-
-	log_info("ENABLE '%s' command issued", arg);
-	if (multithread_mode) {
-		FOR_EACH_THREAD(thread_id){
-			db = find_database(arg, thread_id);
-			if(db){
-				break;
-			}
-		}
-	} else {
-		db = find_database(arg, -1);
-	}
-	if (db == NULL)
-		return admin_error(admin, "no such database: %s", arg);
-	if (db->admin)
-		return admin_error(admin, "cannot disable admin db: %s", arg);
-
-	db->db_disabled = false;
-	return admin_ready(admin, "ENABLE");
+	return admin_cmd_disable_internal(admin, arg, false);
 }
 
 
@@ -1780,47 +1772,52 @@ static void find_client_global_internal(PgSocket *kill_client, PgPool *pool, int
 		return;
 }
 
-static void find_client_global_cb(struct List *item, void *ctx) {
-	PgPool *pool = container_of(item, PgPool, head);
-	struct {
-		PgSocket *kill_client;
-		int target_id;
-	} *data = ctx;
-	find_client_global_internal(data->kill_client, pool, data->target_id);
-}
+typedef struct {
+    PgSocket * client; 
+	int thread_id;
+} FindClientRes;
 
-static PgSocket *find_client_global(unsigned long long int target_id)
+static FindClientRes find_client_global(unsigned long long int target_id)
 {
 	PgSocket *kill_client = NULL;
 	struct List *item;
 	PgPool *pool;
+	FindClientRes find_client_res = {NULL, -1};
 
 	if (multithread_mode) {
 		FOR_EACH_THREAD(thread_id){
-			struct {
-				PgSocket *kill_client;
-				int target_id;
-			} data = {kill_client, target_id};
-			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), find_client_global_cb, &data);
-			if (kill_client != NULL)
-				return kill_client;
+			lock_and_pause_thread(thread_id);
+			statlist_for_each(item, &(threads[thread_id].pool_list.list)) {
+				pool = container_of(item, PgPool, head);
+
+				find_client_global_internal(kill_client, pool, target_id);
+				if (kill_client != NULL){
+					unlock_and_resume_thread(thread_id);
+					find_client_res.thread_id = thread_id;
+					find_client_res.client = kill_client;
+					break;
+				}
+			}
+			unlock_and_resume_thread(thread_id);
 		}
 	} else {
 		statlist_for_each(item, &pool_list) {
 			pool = container_of(item, PgPool, head);
 
 			find_client_global_internal(kill_client, pool, target_id);
-			if (kill_client != NULL)
-				return kill_client;
+			if (kill_client != NULL){
+				find_client_res.client = kill_client;
+				break;
+			}
 		}
 	}
-	return NULL;
+	return find_client_res;
 }
 
 /* Command: KILL_CLIENT */
 static bool admin_cmd_kill_client(PgSocket *admin, const char *arg)
 {
-	PgSocket *kill_client;
+	FindClientRes kill_client;
 	unsigned long long int target_id = 0;
 
 	if (sscanf(arg, "%llu", &target_id) != 1) {
@@ -1828,17 +1825,21 @@ static bool admin_cmd_kill_client(PgSocket *admin, const char *arg)
 	}
 
 	kill_client = find_client_global((unsigned long long int) target_id);
-	if (kill_client == NULL) {
+	if (kill_client.client == NULL) {
 		return admin_error(admin, "client not found");
 	}
-	disconnect_client(kill_client, true, "admin forced disconnect");
-	return admin_ready(admin, "KILL_CLIENT");
-}
+	int thread_id = get_current_thread_id(multithread_mode);
 
-static void kill_pool_cb(struct List *item, void *ctx) {
-	int thread_id = *(int *)ctx;
-	PgPool *pool = container_of(item, PgPool, head);
-	kill_pool(pool, thread_id);
+	lock_and_pause_thread(kill_client.thread_id);
+	// switch to target thread
+	set_thread_id(kill_client.thread_id);
+
+	disconnect_client(kill_client.client, true, "admin forced disconnect");
+
+	// restore current thread
+	set_thread_id(thread_id);
+	unlock_and_resume_thread(kill_client.thread_id);
+	return admin_ready(admin, "KILL_CLIENT");
 }
 
 /* Command: KILL */
@@ -1859,26 +1860,34 @@ static bool admin_cmd_kill(PgSocket *admin, const char *arg)
 
 	log_info("KILL '%s' command issued", arg);
 	if (multithread_mode) {
+		bool found = false;
 		FOR_EACH_THREAD(thread_id){
+			lock_and_pause_thread(thread_id);
 			db = find_or_register_database(admin, arg, thread_id);
-			if(db){
-				break;
+			if(!db){
+				continue;
 			}
+			if (db == admin->pool->db)
+				return admin_error(admin, "cannot kill admin db: %s", arg);
+			found = true;
+			db->db_paused = true;
+			statlist_for_each_safe(item, &(threads[thread_id].pool_list.list), tmp) {
+				pool = container_of(item, PgPool, head);
+				if (pool->db->name == db->name)
+					kill_pool(pool, thread_id);
+			}
+			unlock_and_resume_thread(thread_id);
 		}
+		if(!found)
+			return admin_error(admin, "cannot kill admin db: %s", arg);
 	} else {
 		db = find_or_register_database(admin, arg, -1);
-	}
-	if (db == NULL)
-		return admin_error(admin, "no such database: %s", arg);
-	if (db == admin->pool->db)
-		return admin_error(admin, "cannot kill admin db: %s", arg);
+		if (db == NULL)
+			return admin_error(admin, "no such database: %s", arg);
+		if (db == admin->pool->db)
+			return admin_error(admin, "cannot kill admin db: %s", arg);
 
-	db->db_paused = true;
-	if (multithread_mode) {
-		FOR_EACH_THREAD(thread_id){
-			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), kill_pool_cb, &thread_id);
-		}
-	} else {
+		db->db_paused = true;
 		statlist_for_each_safe(item, &pool_list, tmp) {
 			pool = container_of(item, PgPool, head);
 			if (pool->db->name == db->name)
@@ -1890,10 +1899,16 @@ static bool admin_cmd_kill(PgSocket *admin, const char *arg)
 }
 
 static void wait_close_database_cb(struct List *item, void *ctx) {
-	int *active = (int *)ctx;
+	struct {
+		int active;
+		int thread_id;
+	} *active = (struct {
+		int active;
+		int thread_id;
+	} *)  ctx;
 	PgPool *pool = container_of(item, PgPool, head);
 	pool->db->db_wait_close = true;
-	*active += count_db_active(pool->db);
+	active->active += count_db_active(pool->db, active->thread_id);
 }
 
 /* Command: WAIT_CLOSE */
@@ -1905,12 +1920,16 @@ static bool admin_cmd_wait_close(PgSocket *admin, const char *arg)
 	if (!arg[0]) {
 		struct List *item;
 		PgPool *pool;
-		int active = 0;
+		struct {
+			int active;
+			int thread_id;
+		} para = {0,-1};
 
 		log_info("WAIT_CLOSE command issued");
 		if (multithread_mode) {	
 			FOR_EACH_THREAD(thread_id){
-				thread_safe_statlist_iterate(&(threads[thread_id].pool_list), wait_close_database_cb, &active);
+				para.thread_id = thread_id;
+				thread_safe_statlist_iterate(&(threads[thread_id].pool_list), wait_close_database_cb, &para);
 			}
 		} else {
 			statlist_for_each(item, &pool_list) {
@@ -1919,10 +1938,10 @@ static bool admin_cmd_wait_close(PgSocket *admin, const char *arg)
 				pool = container_of(item, PgPool, head);
 				db = pool->db;
 				db->db_wait_close = true;
-				active += count_db_active(db);
+				para.active += count_db_active(db,-1);
 			}
 		}
-		if (active > 0)
+		if (para.active > 0)
 			admin->wait_for_response = true;
 		else
 			return admin_ready(admin, "WAIT_CLOSE");
@@ -1931,24 +1950,39 @@ static bool admin_cmd_wait_close(PgSocket *admin, const char *arg)
 
 		log_info("WAIT_CLOSE '%s' command issued", arg);
 		if (multithread_mode) {
+			bool found = false;
+			bool wait = false;
 			FOR_EACH_THREAD(thread_id){
+				lock_and_pause_thread(thread_id);
 				db = find_or_register_database(admin, arg, thread_id);
+				unlock_and_resume_thread(thread_id);
 				if(!db){
-					break;
+					continue;
+				}
+				found = true;
+				if (db == admin->pool->db)
+					return admin_error(admin, "cannot wait in admin db: %s", arg);
+				if (count_db_active(db,-1) > 0){
+					admin->wait_for_response = true;
+					wait = true;
 				}
 			}
+			if (!found)
+				return admin_error(admin, "no such database: %s", arg);
+			if(!wait)
+				return admin_ready(admin, "WAIT_CLOSE");
 		} else {
 			db = find_or_register_database(admin, arg, -1);
+			if (db == NULL)
+				return admin_error(admin, "no such database: %s", arg);
+			if (db == admin->pool->db)
+				return admin_error(admin, "cannot wait in admin db: %s", arg);
+			db->db_wait_close = true;
+			if (count_db_active(db,-1) > 0)
+				admin->wait_for_response = true;
+			else
+				return admin_ready(admin, "WAIT_CLOSE");
 		}
-		if (db == NULL)
-			return admin_error(admin, "no such database: %s", arg);
-		if (db == admin->pool->db)
-			return admin_error(admin, "cannot wait in admin db: %s", arg);
-		db->db_wait_close = true;
-		if (count_db_active(db) > 0)
-			admin->wait_for_response = true;
-		else
-			return admin_ready(admin, "WAIT_CLOSE");
 	}
 
 	return true;
@@ -2325,7 +2359,6 @@ void admin_setup(int thread_id)
 	db = add_database("pgbouncer", thread_id);
 	if (!db)
 		die("no memory for admin database");
-
 	db->port = cf_listen_port;
 	db->pool_size = 2;
 	db->admin = true;
@@ -2431,7 +2464,7 @@ void admin_wait_close_done(void)
 	struct List *item, *tmp;
 	PgSocket *admin;
 	bool res;
-
+	// FIXME thread safe admin pool
 	statlist_for_each_safe(item, &admin_pool->active_client_list, tmp) {
 		admin = container_of(item, PgSocket, head);
 		if (!admin->wait_for_response)

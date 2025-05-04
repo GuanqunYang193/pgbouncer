@@ -228,6 +228,7 @@ void* worker_func(void* arg){
 			usleep(THREAD_PAUSE_SEC*USEC);
 			continue;
 		}
+		// log_info("thread [%ld]",this_thread->thread_id);
 
         int err;
         reset_time_cache();
@@ -263,11 +264,13 @@ void init_thread(int thread_id){
 	statlist_init(&(threads[thread_id].peer_pool_list), NULL);
 	statlist_init(&(threads[thread_id].login_client_list), NULL);
 	thread_safe_statlist_init(&(threads[thread_id].database_list), NULL);
-	thread_safe_statlist_init(&(threads[thread_id].autodatabase_idle_list), NULL);
+	statlist_init(&(threads[thread_id].autodatabase_idle_list), NULL);
 	statlist_init(&(threads[thread_id].justfree_client_list), NULL);
 	statlist_init(&(threads[thread_id].justfree_server_list), NULL);
 	threads[thread_id].vpool = NULL;
 	threads[thread_id].cf_shutdown = SHUTDOWN_NONE;
+	threads[thread_id].thread_metadata.thread_status = THREAD_RUNNING;
+	spin_lock_init(&(threads[thread_id].thread_metadata.thread_lock));
 }
 
 void start_threads(){
@@ -327,6 +330,32 @@ void lock_thread(int thread_id){
 
 void unlock_thread(int thread_id){
 	spin_lock_release(&(threads[thread_id].thread_metadata.thread_lock));
+}
+
+void lock_and_pause_thread(int thread_id){
+	if(thread_id == get_current_thread_id(thread_id)){
+		return;
+	}
+	lock_thread(thread_id);
+	request_pause_thread(thread_id);
+	while(!thread_paused(thread_id)){
+		usleep(0.05*USEC);
+	}
+}
+
+void unlock_and_resume_thread(int thread_id){
+	if(thread_id == get_current_thread_id(thread_id)){
+		return;
+	}
+	thread_resume(thread_id);
+	unlock_thread(thread_id);
+}
+
+inline void set_thread_id(int thread_id){
+	if(thread_id == -1){
+		return;
+	}
+	pthread_setspecific(thread_pointer, &(threads[thread_id]));
 }
 
 inline int get_current_thread_id(const bool multithread_mode){
