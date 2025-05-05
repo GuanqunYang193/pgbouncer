@@ -18,7 +18,7 @@
 	(multithread_mode ? (void *)&(threads[thread_id].name) : (void *)&name)
 
 #define GET_MULTITHREAD_CACHE_PTR(name, thread_id) \
-	(multithread_mode ? (void *)(threads[thread_id].name) : (void *)(name))
+	(multithread_mode ? (threads[thread_id].name) : (name))
 
 
 typedef struct SignalEvent{
@@ -66,13 +66,13 @@ typedef struct Thread {
     struct StatList peer_pool_list;
     struct SignalEvent signal_event;
     struct ThreadSafeStatList database_list;
-    struct ThreadSafeStatList autodatabase_idle_list;
+    struct StatList autodatabase_idle_list;
     struct Slab *client_cache;
     struct Slab *server_cache;
-    struct ThreadSafeSlab *pool_cache;
+    struct Slab *pool_cache;
     struct Slab *peer_pool_cache;
-    struct ThreadSafeSlab *db_cache;
-    struct ThreadSafeSlab *var_list_cache;
+    struct Slab *db_cache;
+    struct Slab *var_list_cache;
     struct Slab *iobuf_cache;
     struct Slab *server_prepared_statement_cache;
     struct Slab *outstanding_request_cache;
@@ -101,6 +101,8 @@ typedef struct Thread {
     struct PktBuf *temp_pktbuf;
 
     int cf_shutdown;
+
+    unsigned int seq;
 } Thread;
 
 typedef struct ClientRequest {
@@ -122,4 +124,8 @@ bool thread_paused(int thread_id);
 void resume_thread(int thread_id);
 void lock_thread(int thread_id);
 void unlock_thread(int thread_id);
+void lock_and_pause_thread(int thread_id);
+void unlock_and_resume_thread(int thread_id);
+
+void set_thread_id(int thread_id);
 int get_current_thread_id(const bool multithread_mode);

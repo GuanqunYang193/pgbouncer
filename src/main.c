@@ -976,7 +976,6 @@ int main(int argc, char *argv[])
 		free(global_username);
 		global_username = xstrdup(arg_username);
 	}
-
 	/* switch user is needed */
 	if (global_username && *global_username)
 		change_user(global_username);
@@ -984,7 +983,6 @@ int main(int argc, char *argv[])
 	/* disallow running as root */
 	if (getuid() == 0)
 		die("PgBouncer should not run as root");
-	
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
 			admin_setup(thread_id);

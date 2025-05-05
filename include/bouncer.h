@@ -913,4 +913,5 @@ void config_for_each(void (*param_cb)(void *arg, const char *name, const char *v
 
 extern pthread_key_t event_base_key;
 extern pthread_key_t thread_pointer;
+extern pthread_key_t thread_id;
 

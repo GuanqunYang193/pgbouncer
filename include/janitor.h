@@ -24,4 +24,4 @@ bool suspend_socket(PgSocket *sk, bool force)  _MUSTCHECK;
 void kill_pool(PgPool *pool, int thread_id);
 void kill_peer_pool(PgPool *pool, int thread_id);
 void kill_database(PgDatabase *db, int thread_id);
-void kill_peer(PgDatabase *db);
+void kill_peer(PgDatabase *db, int thread_id);
