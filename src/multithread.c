@@ -347,7 +347,7 @@ void unlock_and_resume_thread(int thread_id){
 	if(thread_id == get_current_thread_id(thread_id)){
 		return;
 	}
-	thread_resume(thread_id);
+	resume_thread(thread_id);
 	unlock_thread(thread_id);
 }
 
