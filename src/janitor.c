@@ -969,11 +969,11 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	if(multithread_mode){
 		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 		if (this_thread->cf_shutdown == SHUTDOWN_WAIT_FOR_SERVERS && get_active_server_count(this_thread->thread_id) == 0) {
-				log_info("[Thread %ld]server connections dropped, exiting", this_thread->thread_id);
-				this_thread->cf_shutdown = SHUTDOWN_IMMEDIATE;
-				struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
-				event_base_loopbreak(base);
-				return;
+			log_info("[Thread %ld]server connections dropped, exiting", this_thread->thread_id);
+			this_thread->cf_shutdown = SHUTDOWN_IMMEDIATE;
+			struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
+			event_base_loopbreak(base);
+			return;
 		}
 
 		if (this_thread->cf_shutdown == SHUTDOWN_WAIT_FOR_CLIENTS && get_active_client_count(this_thread->thread_id) == 0) {
