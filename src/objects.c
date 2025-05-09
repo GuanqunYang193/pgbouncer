@@ -107,7 +107,7 @@ int get_active_client_count(int thread_id)
 int get_active_server_count(int thread_id)
 {
 	if(thread_id == -1)
-		return slab_active_count(client_cache);
+		return slab_active_count(server_cache);
 	return slab_active_count(threads[thread_id].server_cache);
 }
 
@@ -2763,11 +2763,8 @@ bool use_server_socket(int fd, PgAddr *addr,
 	if (!pool)
 		return false;
 
-	struct Slab *server_cache_ = server_cache;
-	if(thread_id != -1)
-		server_cache_ = threads[thread_id].server_cache;
-
-	server = slab_alloc(server_cache_);
+	struct Slab *server_cache_ptr = GET_MULTITHREAD_CACHE_PTR(server_cache,thread_id);
+	server = slab_alloc(server_cache_ptr);
 	if (!server)
 		return false;
 
@@ -3062,7 +3059,7 @@ void reuse_just_freed_objects(void)
 	 */
 	int thread_id = get_current_thread_id(multithread_mode);
 	struct StatList* justfree_client_list_ptr = GET_MULTITHREAD_LIST_PTR(justfree_client_list, thread_id);
-
+	struct StatList* justfree_server_list_ptr = GET_MULTITHREAD_LIST_PTR(justfree_server_list, thread_id);	
 	statlist_for_each_safe(item, justfree_client_list_ptr, tmp) {
 		sk = container_of(item, PgSocket, head);
 		if (sbuf_is_closed(&sk->sbuf)) {
@@ -3071,7 +3068,7 @@ void reuse_just_freed_objects(void)
 			close_works = sbuf_close(&sk->sbuf);
 		}
 	}
-	statlist_for_each_safe(item, justfree_client_list_ptr, tmp) {
+	statlist_for_each_safe(item, justfree_server_list_ptr, tmp) {
 		sk = container_of(item, PgSocket, head);
 		if (sbuf_is_closed(&sk->sbuf)) {
 			change_server_state(sk, SV_FREE);

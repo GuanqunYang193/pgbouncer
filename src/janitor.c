@@ -488,8 +488,12 @@ static void pool_client_maint(PgPool *pool)
 			} else {
 				age = now - client->query_start;
 			}
-
-			if (cf_shutdown == SHUTDOWN_WAIT_FOR_SERVERS) {
+			int* cf_shutdown_ptr = &cf_shutdown;
+			if(multithread_mode){
+				int thread_id = get_current_thread_id(multithread_mode);
+				cf_shutdown_ptr = &(threads[thread_id].cf_shutdown);
+			}
+			if (*cf_shutdown_ptr == SHUTDOWN_WAIT_FOR_SERVERS) {
 				disconnect_client(client, true, "server shutting down");
 			} else if (cf_query_timeout > 0 && age > cf_query_timeout) {
 				disconnect_client(client, true, "query_timeout");
@@ -965,11 +969,11 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	if(multithread_mode){
 		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 		if (this_thread->cf_shutdown == SHUTDOWN_WAIT_FOR_SERVERS && get_active_server_count(this_thread->thread_id) == 0) {
-			log_info("server connections dropped, exiting");
-			this_thread->cf_shutdown = SHUTDOWN_IMMEDIATE;
-			struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
-			event_base_loopbreak(base);
-			return;
+				log_info("[Thread %ld]server connections dropped, exiting", this_thread->thread_id);
+				this_thread->cf_shutdown = SHUTDOWN_IMMEDIATE;
+				struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
+				event_base_loopbreak(base);
+				return;
 		}
 
 		if (this_thread->cf_shutdown == SHUTDOWN_WAIT_FOR_CLIENTS && get_active_client_count(this_thread->thread_id) == 0) {
