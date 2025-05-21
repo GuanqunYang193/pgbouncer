@@ -114,9 +114,10 @@ int get_active_server_count(int thread_id)
 /* fast way to get number of active clients */
 int get_total_active_client_count(void)
 {
+	int total_count_from_all_threads;
 	if(!multithread_mode)
 		return slab_active_count(client_cache);
-	int total_count_from_all_threads = 0;
+	total_count_from_all_threads = 0;
 	FOR_EACH_THREAD(thread_id){	
 		total_count_from_all_threads += slab_active_count(threads[thread_id].client_cache);
 	}
@@ -126,9 +127,10 @@ int get_total_active_client_count(void)
 /* fast way to get number of active servers */
 int get_total_active_server_count(void)
 {
+	int total_count_from_all_threads;
 	if(!multithread_mode)
 		return slab_active_count(server_cache);
-	int total_count_from_all_threads = 0;
+	total_count_from_all_threads = 0;
 	FOR_EACH_THREAD(thread_id){	
 		total_count_from_all_threads += slab_active_count(threads[thread_id].server_cache);
 	}
@@ -138,12 +140,14 @@ int get_total_active_server_count(void)
 static void construct_client(void *obj)
 {
 	PgSocket *client = obj;
+	int thread_id;
+	struct Slab * var_list_cache_ptr;
 	memset(client, 0, sizeof(PgSocket));
 	list_init(&client->head);
 	sbuf_init(&client->sbuf, client_proto);
 
-	int thread_id = get_current_thread_id(multithread_mode);
-	struct Slab * var_list_cache_ptr = GET_MULTITHREAD_CACHE_PTR(var_list_cache, thread_id);
+	thread_id = get_current_thread_id(multithread_mode);
+	var_list_cache_ptr = GET_MULTITHREAD_CACHE_PTR(var_list_cache, thread_id);
 
 	client->vars.var_list = slab_alloc(var_list_cache_ptr);
 	client->state = CL_FREE;
@@ -155,12 +159,14 @@ static void construct_client(void *obj)
 static void construct_server(void *obj)
 {
 	PgSocket *server = obj;
+	struct Slab *var_list_cache_ptr;
+	int thread_id;
 	memset(server, 0, sizeof(PgSocket));
 	list_init(&server->head);
 	sbuf_init(&server->sbuf, server_proto);
 
-	int thread_id = get_current_thread_id(multithread_mode);
-	struct Slab *var_list_cache_ptr = GET_MULTITHREAD_CACHE_PTR(var_list_cache, thread_id);
+	thread_id = get_current_thread_id(multithread_mode);
+	var_list_cache_ptr = GET_MULTITHREAD_CACHE_PTR(var_list_cache, thread_id);
 
 	server->vars.var_list = slab_alloc(var_list_cache_ptr);
 
@@ -563,16 +569,19 @@ static int cmp_database(struct List *i1, struct List *i2)
 }
 
 static void thread_safe_put_in_order_cb(struct List *item, void *ctx) {
+	int res;
 	struct {
 		struct List *newitem;
 		bool *found;
 		int (*cmpfn)(struct List *, struct List *);
 		struct ThreadSafeStatList *list;
-	} *data = ctx;
+	} *data;
+	data = ctx;
+
 	if (*data->found)
 		return;
 	
-	int res = data->cmpfn(item, data->newitem);
+	res = data->cmpfn(item, data->newitem);
 	if (res == 0) {
 		fatal("thread_safe_put_in_order_cb: found existing elem");
 	} else if (res > 0) {
@@ -1316,6 +1325,7 @@ PgCredentials *find_or_add_new_global_credentials(const char *name, const char *
  */
 bool add_outstanding_request(PgSocket *client, char type, ResponseAction action)
 {
+	struct Slab *outstanding_request_cache_ptr;
 	OutstandingRequest *request = NULL;
 
 	PgSocket *server = client->link;
@@ -1334,7 +1344,8 @@ bool add_outstanding_request(PgSocket *client, char type, ResponseAction action)
 			   type);
 		return queue_fake_response(client, type);
 	}
-	struct Slab *outstanding_request_cache_ptr = outstanding_request_cache;
+	
+	outstanding_request_cache_ptr = outstanding_request_cache;
 	if(multithread_mode){
 		int thread_id = get_current_thread_id(multithread_mode);
 		outstanding_request_cache_ptr = threads[thread_id].outstanding_request_cache;
@@ -1360,12 +1371,13 @@ bool add_outstanding_request(PgSocket *client, char type, ResponseAction action)
 bool pop_outstanding_request(PgSocket *server, const char types[], bool *skip)
 {
 	OutstandingRequest *request;
+	struct List *item;
 	struct Slab *outstanding_request_cache_ptr = outstanding_request_cache;
 	if(multithread_mode){
 		int thread_id = get_current_thread_id(multithread_mode);
 		outstanding_request_cache_ptr = threads[thread_id].outstanding_request_cache;
 	}
-	struct List *item = statlist_first(&server->outstanding_requests);
+	item = statlist_first(&server->outstanding_requests);
 	if (!item)
 		return false;
 
@@ -2178,6 +2190,8 @@ void launch_new_connection(PgPool *pool, bool evict_if_needed)
 {
 	PgSocket *server;
 	int max;
+	int thread_id;
+	struct Slab *server_cache_ptr;
 
 	log_debug("launch_new_connection: start");
 	/*
@@ -2227,8 +2241,9 @@ void launch_new_connection(PgPool *pool, bool evict_if_needed)
 	 * this works just fine, because we only ever open a single connection at
 	 * once (see top of this function).
 	 */
-	int thread_id = get_current_thread_id(multithread_mode);
-	struct Slab *server_cache_ptr = GET_MULTITHREAD_CACHE_PTR(server_cache, thread_id);
+	
+	thread_id = get_current_thread_id(multithread_mode);
+	server_cache_ptr = GET_MULTITHREAD_CACHE_PTR(server_cache, thread_id);
 
 	if (!statlist_empty(&pool->waiting_cancel_req_list) && max < (2 * pool_pool_size(pool))) {
 		log_debug("launch_new_connection: bypass pool limitations for cancel request");
@@ -2736,11 +2751,13 @@ bool use_server_socket(int fd, PgAddr *addr,
 {
 
 	PgDatabase *db = find_database(dbname, thread_id);
+	struct Slab *server_cache_ptr;
 	PgCredentials *credentials;
 	PgPool *pool;
 	PgSocket *server;
 	PktBuf tmp;
 	bool res;
+	
 
 	/* if the database not found, it's an auto database -> registering... */
 	if (!db) {
@@ -2763,7 +2780,7 @@ bool use_server_socket(int fd, PgAddr *addr,
 	if (!pool)
 		return false;
 
-	struct Slab *server_cache_ptr = GET_MULTITHREAD_CACHE_PTR(server_cache,thread_id);
+	server_cache_ptr = GET_MULTITHREAD_CACHE_PTR(server_cache,thread_id);
 	server = slab_alloc(server_cache_ptr);
 	if (!server)
 		return false;
@@ -2904,15 +2921,6 @@ void tag_pool_dirty(PgPool *pool)
 		server = container_of(item, PgSocket, head);
 		disconnect_server(server, true, "connect string changed");
 	}
-}
-
-static void tag_database_dirty_db(struct List *item, void *ctx) {
-	PgPool *pool = container_of(item, PgPool, head);
-	struct {
-		PgDatabase *db;
-	} *data = ctx;
-	if (pool->db->name == data->db->name)
-		tag_pool_dirty(pool);
 }
 
 // Not thread safe. Pause the thread before calling this function.
@@ -3088,7 +3096,6 @@ void objects_cleanup_multithread(void)
 {
 	log_info("objects_cleanup_multithread: start");
 	struct List *item, *tmp;
-	PgDatabase *db;
 
 	/* close can be postpones, just in case call twice */
 	reuse_just_freed_objects();

@@ -1,6 +1,12 @@
 #include <multithread.h>
 #include <bouncer.h>
 #include <pooler.h>
+#include <signal.h>
+
+static void handle_sigterm_main(evutil_socket_t sock, short flags, void *arg);
+static void handle_sigterm(evutil_socket_t sock, short flags, void *arg);
+static void* worker_func(void* arg);
+static void init_thread(int thread_id);
 
 int next_thread = 0;
 bool multithread_mode = false;
@@ -254,7 +260,7 @@ static void event_base_destructor(void* base_ptr) {
 void init_thread(int thread_id){
 	threads[thread_id].thread_id = thread_id;
 	if (pipe(threads[thread_id].pipefd) < 0) {
-		die("Thread %ld init failed",thread_id);
+		die("Thread %d init failed",thread_id);
 	}
 	int flags = fcntl(threads[thread_id].pipefd[1], F_GETFL, 0);
 	if (fcntl(threads[thread_id].pipefd[1], F_SETFL, flags | O_NONBLOCK) < 0) {

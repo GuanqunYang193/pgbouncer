@@ -405,7 +405,8 @@ static bool set_defer_accept(struct CfValue *cv, const char *val)
 static void set_db_dead_cb(struct List *item, void *ctx) {
 	PgDatabase *db;
 	db = container_of(item, PgDatabase, head);
-	bool flag = *(bool *)ctx;
+	bool flag;
+	flag = *(bool *)ctx;
 
 	if (db->admin)
 		return;
@@ -646,7 +647,8 @@ static void count_fd_cb(struct List *item, void *ctx) {
 	struct {
         int *fd_cnt;
         int total_users;
-    } *data = (struct { int *fd_cnt; int total_users; } *)ctx;
+    } *data;
+    data = ctx;
     int *fd_cnt = data->fd_cnt;
     int total_users = data->total_users;
     if (db->forced_user_credentials)

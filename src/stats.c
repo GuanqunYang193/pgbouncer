@@ -367,9 +367,9 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 
 	struct StatList* pool_list_ptr = &pool_list;
 	int thread_id = -1;
-	if(multithread_mode){
+	if (multithread_mode) {
 		thread_id = get_current_thread_id(multithread_mode);
-		pool_list_ptr = &threads[thread_id].pool_list;
+		pool_list_ptr = (struct StatList*)&threads[thread_id].pool_list;
 	}
 
 	statlist_for_each(item, pool_list_ptr) {

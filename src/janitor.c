@@ -327,17 +327,22 @@ static int per_loop_wait_close(PgPool *pool)
 }
 
 static void per_loop_maint_cb(struct List *item, void *ctx) {
-	PgPool *pool = container_of(item, PgPool, head);
-	if (pool->db->admin)
-		return;
-
+	PgPool *pool;
+	
 	struct {
 		int *active_count_ptr;
 		int *waiting_count_ptr;
 		bool *partial_pause_ptr;
 		bool *partial_wait_ptr;
 		bool *force_suspend_ptr;
-	} *data = ctx;
+	} *data;
+
+	pool = container_of(item, PgPool, head);
+
+	if (pool->db->admin)
+		return;
+	
+	data = ctx;
 
 	switch (cf_pause_mode) {
 	case P_NONE:
@@ -369,20 +374,22 @@ void per_loop_maint(void)
 {
 	struct List *item;
 	PgPool *pool;
+	int thread_id;
+	void* pool_list_ptr;
 	int active_count = 0;
 	int waiting_count = 0;
 	bool partial_pause = false;
 	bool partial_wait = false;
 	bool force_suspend = false;
-
+	
 	if (cf_pause_mode == P_SUSPEND && cf_suspend_timeout > 0) {
 		usec_t stime = get_cached_time() - g_suspend_start;
 		if (stime >= cf_suspend_timeout)
 			force_suspend = true;
 	}
 
-	int thread_id = get_current_thread_id(multithread_mode);
-	void* pool_list_ptr = GET_MULTITHREAD_LIST_PTR(pool_list, thread_id);
+	thread_id = get_current_thread_id(multithread_mode);
+	pool_list_ptr = GET_MULTITHREAD_LIST_PTR(pool_list, thread_id);
 
 	if(multithread_mode){
 		struct {
@@ -488,7 +495,8 @@ static void pool_client_maint(PgPool *pool)
 			} else {
 				age = now - client->query_start;
 			}
-			int* cf_shutdown_ptr = &cf_shutdown;
+			int* cf_shutdown_ptr;
+			cf_shutdown_ptr = &cf_shutdown;
 			if(multithread_mode){
 				int thread_id = get_current_thread_id(multithread_mode);
 				cf_shutdown_ptr = &(threads[thread_id].cf_shutdown);
@@ -755,11 +763,12 @@ static void cleanup_client_logins(void)
 	struct List *item, *tmp;
 	PgSocket *client;
 	usec_t age;
+	struct StatList* login_client_list_ptr;
 	usec_t now = get_cached_time();
 
 	if (cf_client_login_timeout <= 0)
 		return;
-	struct StatList* login_client_list_ptr = &login_client_list;
+	login_client_list_ptr = &login_client_list;
 	if(multithread_mode){
 		int thread_id = get_current_thread_id(multithread_mode);
 		login_client_list_ptr = &(threads[thread_id].login_client_list);
@@ -770,7 +779,6 @@ static void cleanup_client_logins(void)
 		if (age > cf_client_login_timeout)
 			disconnect_client(client, true, "client_login_timeout");
 	}
-
 }
 
 static void cleanup_inactive_autodatabases_internal(PgDatabase *db, usec_t now, int thread_id){
@@ -783,26 +791,18 @@ static void cleanup_inactive_autodatabases_internal(PgDatabase *db, usec_t now, 
 	}
 }
 
-static void cleanup_inactive_autodatabases_cb(struct List *item, void *ctx){
-	PgDatabase *db = container_of(item, PgDatabase, head);
-	struct {
-		int thread_id;
-		usec_t now;
-	} *data = ctx;
-	cleanup_inactive_autodatabases_internal(db, data->now, data->thread_id);
-}
-
 static void cleanup_inactive_autodatabases(void)
 {
 	PgDatabase *db;
 	struct List *item, *tmp;
 	usec_t now = get_cached_time();
+	struct StatList* autodatabase_idle_list_ptr_;
 	int thread_id = get_current_thread_id(multithread_mode);
 
 	if (cf_autodb_idle_timeout <= 0)
 		return;
 	
-	struct StatList* autodatabase_idle_list_ptr_ = GET_MULTITHREAD_LIST_PTR(autodatabase_idle_list, thread_id);
+	autodatabase_idle_list_ptr_ = GET_MULTITHREAD_LIST_PTR(autodatabase_idle_list, thread_id);
 
 	/* now kill the old ones */
 	statlist_for_each_safe(item, (struct StatList*)autodatabase_idle_list_ptr_, tmp) {
@@ -894,7 +894,8 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	 * many users.
 	   _	 */
 	
-	struct StatList* peer_pool_list_ptr = (struct StatList*)GET_MULTITHREAD_LIST_PTR(peer_pool_list, thread_id);
+	struct StatList* peer_pool_list_ptr;
+	peer_pool_list_ptr = (struct StatList*)GET_MULTITHREAD_LIST_PTR(peer_pool_list, thread_id);
 
 	void* database_list_ptr = GET_MULTITHREAD_LIST_PTR(database_list, thread_id);
 	void* pool_list_ptr = GET_MULTITHREAD_LIST_PTR(pool_list, thread_id);
@@ -969,17 +970,19 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	if(multithread_mode){
 		Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 		if (this_thread->cf_shutdown == SHUTDOWN_WAIT_FOR_SERVERS && get_active_server_count(this_thread->thread_id) == 0) {
-			log_info("[Thread %ld]server connections dropped, exiting", this_thread->thread_id);
+			struct event_base * base;
+			log_info("[Thread %d] server connections dropped, exiting", this_thread->thread_id);
 			this_thread->cf_shutdown = SHUTDOWN_IMMEDIATE;
-			struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
+			base = (struct event_base *)pthread_getspecific(event_base_key);
 			event_base_loopbreak(base);
 			return;
 		}
 
 		if (this_thread->cf_shutdown == SHUTDOWN_WAIT_FOR_CLIENTS && get_active_client_count(this_thread->thread_id) == 0) {
+			struct event_base * base;
 			log_info("client connections dropped, exiting");
 			this_thread->cf_shutdown = SHUTDOWN_IMMEDIATE;
-			struct event_base * base = (struct event_base *)pthread_getspecific(event_base_key);
+			base = (struct event_base *)pthread_getspecific(event_base_key);
 			event_base_loopbreak(base);
 			return;
 		}
@@ -1099,9 +1102,9 @@ void kill_database(PgDatabase *db, int thread_id)
 
 	void* autodatabase_idle_list_ptr = GET_MULTITHREAD_LIST_PTR(autodatabase_idle_list, thread_id);
 	void* database_list_ptr = GET_MULTITHREAD_LIST_PTR(database_list, thread_id);
-	struct Slab* db_cache_ptr = &db_cache;
+	struct Slab* db_cache_ptr = db_cache;
 	if(thread_id != -1){
-		db_cache_ptr = &(threads[thread_id].db_cache);
+		db_cache_ptr = threads[thread_id].db_cache;
 	}
 
 	log_warning("dropping database '%s' as it does not exist anymore or inactive auto-database", db->name);
@@ -1180,15 +1183,6 @@ void kill_peer(PgDatabase *db, int thread_id)
 
 	statlist_remove(&peer_list, &db->head);
 	slab_free(peer_cache, db);
-}
-
-
-static void kill_one_database(struct List *item, void *ctx) {	
-	PgDatabase *db = container_of(item, PgDatabase, head);
-	int thread_id = *(int *)ctx;
-	if (db->db_dead) {
-		kill_database(db, thread_id);
-	}
 }
 
 /* as [pgbouncer] section can be loaded after databases,

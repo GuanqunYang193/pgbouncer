@@ -126,7 +126,6 @@ void pktbuf_cleanup(void)
 {
 	pktbuf_free_internal(temp_pktbuf);
 	temp_pktbuf = NULL;
-	bool user_found = true;
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
 			pktbuf_free_internal(threads[thread_id].temp_pktbuf);
