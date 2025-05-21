@@ -101,6 +101,7 @@ static void takeover_load_fd(struct MBuf *pkt, const struct cmsghdr *cmsg)
 	int got;
 	uint64_t ckey;
 	PgAddr addr;
+	int thread_id = -1;
 	bool res = false;
 
 	memset(&addr, 0, sizeof(addr));
@@ -144,7 +145,7 @@ static void takeover_load_fd(struct MBuf *pkt, const struct cmsghdr *cmsg)
 		if (!pga_pton(&addr, saddr, port))
 			fatal("failed to convert address: %s", saddr);
 	}
-	int thread_id = get_current_thread_id(multithread_mode);
+	thread_id = get_current_thread_id(multithread_mode);
 	/* decide what to do with it */
 	if (strcmp(task, "client") == 0) {
 		res = use_client_socket(fd, &addr, db, user, ckey, oldfd, linkfd,
@@ -363,14 +364,15 @@ bool takeover_login(PgSocket *bouncer)
 /* launch connection to running process */
 void takeover_init(void)
 {
+	PgDatabase *db;
+	PgPool *pool = NULL;
+	int thread_id = -1;
 	if(multithread_mode){
 		log_error("takeover_init: multithread mode not supported");
 		return;
 	}
-
-	PgDatabase *db;
-	PgPool *pool = NULL;
-	int thread_id = get_current_thread_id(multithread_mode);
+	
+	thread_id = get_current_thread_id(multithread_mode);
 	db = find_database("pgbouncer", thread_id);
 	if (db)
 		pool = get_pool(db, db->forced_user_credentials, thread_id);

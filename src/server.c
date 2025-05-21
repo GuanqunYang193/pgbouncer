@@ -365,12 +365,15 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 	bool async_response = false;
 	struct List *item, *tmp;
 	bool ignore_packet = false;
+	struct Slab *outstanding_request_cache_;
 
 	Assert(!server->pool->db->admin);
-	struct Slab *outstanding_request_cache_ = outstanding_request_cache;
+	
 	if(multithread_mode){
 		int thread_id = get_current_thread_id(multithread_mode);
 		outstanding_request_cache_ = threads[thread_id].outstanding_request_cache;
+	} else {
+		outstanding_request_cache_ = outstanding_request_cache;
 	}
 
 	switch (pkt->type) {

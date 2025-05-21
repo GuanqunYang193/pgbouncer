@@ -258,9 +258,9 @@ void sbuf_continue(SBuf *sbuf)
 bool sbuf_continue_with_callback(SBuf *sbuf, event_callback_fn user_cb)
 {
 	int err;
-
+	struct event_base * base = pgb_event_base;;
 	AssertActive(sbuf);
-	struct event_base * base = pgb_event_base;
+
 	if(multithread_mode)
 		base = (struct event_base *)pthread_getspecific(event_base_key);
 	event_assign(&sbuf->ev, base, sbuf->sock, EV_READ | EV_PERSIST,
@@ -278,6 +278,7 @@ bool sbuf_continue_with_callback(SBuf *sbuf, event_callback_fn user_cb)
 bool sbuf_use_callback_once(SBuf *sbuf, short ev, event_callback_fn user_cb)
 {
 	int err;
+	struct event_base * base = pgb_event_base;
 	AssertActive(sbuf);
 
 	if (sbuf->wait_type != W_NONE) {
@@ -290,7 +291,6 @@ bool sbuf_use_callback_once(SBuf *sbuf, short ev, event_callback_fn user_cb)
 	}
 
 	/* setup one one-off event handler */
-	struct event_base * base = pgb_event_base;
 	if(multithread_mode)
 		base = (struct event_base *)pthread_getspecific(event_base_key);
 	event_assign(&sbuf->ev, base, sbuf->sock, ev, user_cb, sbuf);
@@ -551,6 +551,7 @@ static bool sbuf_wait_for_data_forced(SBuf *sbuf)
 {
 	int err;
 	struct timeval tv_min;
+	struct event_base * base = pgb_event_base;
 
 	tv_min.tv_sec = 0;
 	tv_min.tv_usec = 1;
@@ -559,7 +560,7 @@ static bool sbuf_wait_for_data_forced(SBuf *sbuf)
 		event_del(&sbuf->ev);
 		sbuf->wait_type = W_NONE;
 	}
-	struct event_base * base = pgb_event_base;
+	
 	if(multithread_mode)
 		base = (struct event_base *)pthread_getspecific(event_base_key);
 	event_assign(&sbuf->ev, base, sbuf->sock, EV_READ, sbuf_recv_forced_cb, sbuf);
@@ -603,6 +604,7 @@ static void sbuf_send_cb(evutil_socket_t sock, short flags, void *arg)
 static bool sbuf_queue_send(SBuf *sbuf)
 {
 	int err;
+	struct event_base * base = pgb_event_base;
 	AssertActive(sbuf);
 	Assert(sbuf->wait_type == W_RECV);
 
@@ -617,7 +619,6 @@ static bool sbuf_queue_send(SBuf *sbuf)
 	}
 
 	/* instead wait for EV_WRITE on destination socket */
-	struct event_base * base = pgb_event_base;
 	if(multithread_mode)
 		base = (struct event_base *)pthread_getspecific(event_base_key);
 	event_assign(&sbuf->ev, base, sbuf->dst->sock, EV_WRITE, sbuf_send_cb, sbuf);

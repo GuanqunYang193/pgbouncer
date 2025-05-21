@@ -376,6 +376,7 @@ void per_loop_maint(void)
 	PgPool *pool;
 	int thread_id;
 	void* pool_list_ptr;
+	struct StatList* login_client_list_;
 	int active_count = 0;
 	int waiting_count = 0;
 	bool partial_pause = false;
@@ -429,8 +430,8 @@ void per_loop_maint(void)
 			}
 		}
 	}
-	
-	struct StatList* login_client_list_ = GET_MULTITHREAD_LIST_PTR(login_client_list, thread_id);
+
+	login_client_list_ = GET_MULTITHREAD_LIST_PTR(login_client_list, thread_id);
 
 	switch (cf_pause_mode) {
 	case P_SUSPEND:

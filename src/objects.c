@@ -1071,12 +1071,16 @@ PgPool *get_peer_pool(PgDatabase *db)
 /* deactivate socket and put into wait queue */
 static void pause_client(PgSocket *client)
 {
+	int* cf_shutdown_ptr;
+
 	Assert(client->state == CL_ACTIVE || client->state == CL_LOGIN);
 	slog_debug(client, "pause_client");
-	int* cf_shutdown_ptr = &cf_shutdown;
+	
 	if(multithread_mode){
 		int thread_id = get_current_thread_id(multithread_mode);
 		cf_shutdown_ptr = &(threads[thread_id].cf_shutdown);
+	} else {
+		cf_shutdown_ptr = &cf_shutdown;
 	}
 
 	if (*cf_shutdown_ptr == SHUTDOWN_WAIT_FOR_SERVERS) {
@@ -2071,7 +2075,7 @@ PgSocket *compare_connections_by_time(PgSocket *lhs, PgSocket *rhs)
 	return lhs->request_time < rhs->request_time ? lhs : rhs;
 }
 
-bool evict_pool_connection_with_old_connection(PgPool *pool, PgSocket *oldest_connection){
+static void evict_pool_connection_with_old_connection(PgPool *pool, PgSocket *oldest_connection){
 	oldest_connection = compare_connections_by_time(oldest_connection, last_socket(&pool->idle_server_list));
 	/* only evict testing connections if nobody's waiting */
 	if (statlist_empty(&pool->waiting_client_list)) {
@@ -2191,7 +2195,7 @@ void launch_new_connection(PgPool *pool, bool evict_if_needed)
 	PgSocket *server;
 	int max;
 	int thread_id;
-	struct Slab *server_cache_ptr;
+	struct Slab *server_cache_ptr = NULL;
 
 	log_debug("launch_new_connection: start");
 	/*
@@ -2962,7 +2966,7 @@ static void tag_autodb_dirty_pool_cb(struct List *item, void *ctx) {
 void tag_autodb_dirty(void)
 {
 	struct List *item, *tmp;
-	PgDatabase *db;
+	PgDatabase *db = NULL;
 	PgPool *pool;
 
 	/*
@@ -2982,7 +2986,8 @@ void tag_autodb_dirty(void)
 		FOR_EACH_THREAD(thread_id){
 			struct {	
 				PgDatabase *db;
-			} data = {db};
+			} data;
+			data.db = db;
 			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), tag_autodb_dirty_pool_cb, &data);
 		}
 	} else {
@@ -3092,11 +3097,11 @@ static void kill_database_cb(struct List *item, void *ctx) {
     kill_database(db, thread_id);
 }
 
-void objects_cleanup_multithread(void)
+static void objects_cleanup_multithread(void)
 {
-	log_info("objects_cleanup_multithread: start");
 	struct List *item, *tmp;
-
+	log_info("objects_cleanup_multithread: start");
+	
 	/* close can be postpones, just in case call twice */
 	reuse_just_freed_objects();
 	reuse_just_freed_objects();
@@ -3162,13 +3167,13 @@ void objects_cleanup_multithread(void)
 
 void objects_cleanup(void)
 {
+	struct List *item, *tmp;
+	PgDatabase *db;
+
 	if(multithread_mode){
 		objects_cleanup_multithread();
 		return;
 	}
-
-	struct List *item, *tmp;
-	PgDatabase *db;
 
 	/* close can be postpones, just in case call twice */
 	reuse_just_freed_objects();

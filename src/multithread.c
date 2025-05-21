@@ -206,12 +206,13 @@ void signal_setup(struct event_base * base, struct SignalEvent* signal_event, in
 }
 
 
-void* worker_func(void* arg){
-    
+void* worker_func(void* arg)
+{
+	int err;
     Thread * this_thread = (Thread*) arg;
+	struct event_base *base = event_base_new();
     pthread_setspecific(thread_pointer, this_thread);
 
-    struct event_base *base = event_base_new();
     if (!base) {
         fprintf(stderr, "[Thread %d] Failed to create event_base.\n", this_thread->thread_id);
         die("event_base_new() failed");
@@ -236,7 +237,6 @@ void* worker_func(void* arg){
 		}
 		// log_info("thread [%ld]",this_thread->thread_id);
 
-        int err;
         reset_time_cache();
         err = event_base_loop(base, EVLOOP_ONCE);
         if (err < 0) {
@@ -258,11 +258,12 @@ static void event_base_destructor(void* base_ptr) {
 }
 
 void init_thread(int thread_id){
+	int flags;
 	threads[thread_id].thread_id = thread_id;
 	if (pipe(threads[thread_id].pipefd) < 0) {
 		die("Thread %d init failed",thread_id);
 	}
-	int flags = fcntl(threads[thread_id].pipefd[1], F_GETFL, 0);
+	flags = fcntl(threads[thread_id].pipefd[1], F_GETFL, 0);
 	if (fcntl(threads[thread_id].pipefd[1], F_SETFL, flags | O_NONBLOCK) < 0) {
 		die("set pipe flag failed");
 	}
@@ -279,7 +280,7 @@ void init_thread(int thread_id){
 	spin_lock_init(&(threads[thread_id].thread_metadata.thread_lock));
 }
 
-void start_threads(){
+void start_threads(void){
 	pthread_key_create(&event_base_key, event_base_destructor);
     pthread_key_create(&thread_pointer, NULL);
 
@@ -288,7 +289,7 @@ void start_threads(){
 	}
 }
 
-void init_threads(){
+void init_threads(void){
 	if(arg_thread_number < 1)
 		return;
 	log_info("allocating %d threads.", arg_thread_number);
@@ -298,7 +299,7 @@ void init_threads(){
 	}
 }
 
-int wait_threads(){
+int wait_threads(void){
 	void* retval = NULL;
 	FOR_EACH_THREAD(tmp_thread_id){	
 		int ret = pthread_join(threads[tmp_thread_id].worker, &retval);
@@ -365,9 +366,10 @@ inline void set_thread_id(int thread_id){
 }
 
 inline int get_current_thread_id(const bool multithread_mode){
+	Thread* this_thread;
     if(!multithread_mode){
 		return -1;
 	}                                          
-	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	return this_thread->thread_id;      
 }
