@@ -649,12 +649,12 @@ PgDatabase *add_peer(const char *name, int peer_id)
 PgDatabase *add_database(const char *name, int thread_id)
 {
 	PgDatabase *db = find_database(name, thread_id);
-	struct Slab * db_cache_ = GET_MULTITHREAD_CACHE_PTR(db_cache, thread_id);
+	struct Slab * db_cache_ptr = GET_MULTITHREAD_CACHE_PTR(db_cache, thread_id);
 	void* database_list_ = GET_MULTITHREAD_LIST_PTR(database_list, thread_id);
 
 	/* create new object if needed */
 	if (db == NULL) {
-		db = slab_alloc(db_cache_);
+		db = slab_alloc(db_cache_ptr);
 
 		if (!db)
 			return NULL;
@@ -662,7 +662,7 @@ PgDatabase *add_database(const char *name, int thread_id)
 		list_init(&db->head);
 		if (strlcpy(db->name, name, sizeof(db->name)) >= sizeof(db->name)) {
 			log_warning("too long db name: %s", name);
-			slab_free((struct Slab *)db_cache_, db);
+			slab_free(db_cache_ptr, db);
 			return NULL;
 		}
 		aatree_init(&db->user_tree, credentials_node_cmp, credentials_node_release);
