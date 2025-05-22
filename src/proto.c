@@ -22,7 +22,7 @@
 
 #include "bouncer.h"
 #include "scram.h"
-
+#include "multithread.h"
 /*
  * parse protocol header from struct MBuf
  */
@@ -212,7 +212,7 @@ void log_server_error(const char *note, PktHdr *pkt)
  */
 
 /* add another server parameter packet to cache */
-bool add_welcome_parameter(PgPool *pool, const char *key, const char *val)
+bool add_welcome_parameter(PgPool *pool, const char *key, const char *val, int thread_id)
 {
 	PktBuf *msg = pool->welcome_msg;
 
@@ -231,7 +231,7 @@ bool add_welcome_parameter(PgPool *pool, const char *key, const char *val)
 		pktbuf_write_AuthenticationOk(msg);
 
 	/* if not stored in ->orig_vars, write full packet */
-	if (!varcache_set(&pool->orig_vars, key, val))
+	if (!varcache_set(&pool->orig_vars, key, val, thread_id))
 		pktbuf_write_ParameterStatus(msg, key, val);
 
 	return !msg->failed;
@@ -327,10 +327,11 @@ static PgCredentials *get_srv_psw(PgSocket *server)
 {
 	PgDatabase *db = server->pool->db;
 	PgCredentials *credentials = server->pool->user_credentials;
+	int thread_id = get_current_thread_id(multithread_mode);
 
 	/* if forced user without password, use userlist psw */
 	if (!credentials->passwd[0] && db->forced_user_credentials) {
-		PgCredentials *c2 = find_global_credentials(credentials->name);
+		PgCredentials *c2 = find_global_credentials(credentials->name, thread_id);
 		if (c2)
 			return c2;
 	}

@@ -22,6 +22,7 @@
 
 #include "bouncer.h"
 #include "usual/time.h"
+#include "multithread.h"
 
 #include <usual/slab.h>
 
@@ -31,6 +32,7 @@ static bool load_parameter(PgSocket *server, PktHdr *pkt, bool startup)
 {
 	const char *key, *val;
 	PgSocket *client = server->link;
+	int thread_id = get_current_thread_id(multithread_mode);
 
 	/*
 	 * Want to see complete packet.  That means SMALL_PKT
@@ -45,15 +47,15 @@ static bool load_parameter(PgSocket *server, PktHdr *pkt, bool startup)
 		goto failed;
 	slog_debug(server, "S: param: %s = %s", key, val);
 
-	varcache_set(&server->vars, key, val);
+	varcache_set(&server->vars, key, val, thread_id);
 
 	if (client) {
 		slog_debug(client, "setting client var: %s='%s'", key, val);
-		varcache_set(&client->vars, key, val);
+		varcache_set(&client->vars, key, val, thread_id);
 	}
 
 	if (startup) {
-		if (!add_welcome_parameter(server->pool, key, val))
+		if (!add_welcome_parameter(server->pool, key, val, thread_id))
 			goto failed_store;
 	}
 
@@ -363,8 +365,16 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 	bool async_response = false;
 	struct List *item, *tmp;
 	bool ignore_packet = false;
+	struct Slab *outstanding_request_cache_;
 
 	Assert(!server->pool->db->admin);
+	
+	if(multithread_mode){
+		int thread_id = get_current_thread_id(multithread_mode);
+		outstanding_request_cache_ = threads[thread_id].outstanding_request_cache;
+	} else {
+		outstanding_request_cache_ = outstanding_request_cache;
+	}
 
 	switch (pkt->type) {
 	default:
@@ -628,7 +638,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 					disconnect_server(client->link, true, "out of memory");
 					return false;
 				}
-				slab_free(outstanding_request_cache, request);
+				slab_free(outstanding_request_cache_, request);
 			}
 		}
 	} else {

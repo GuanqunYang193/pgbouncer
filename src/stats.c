@@ -17,6 +17,7 @@
  */
 
 #include "bouncer.h"
+#include "multithread.h"
 
 static struct event ev_stats;
 static usec_t old_stamp, new_stamp;
@@ -357,6 +358,8 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 	PgPool *pool;
 	PgStats old_total, cur_total;
 	PgStats avg;
+	struct StatList* pool_list_ptr = NULL;
+	int thread_id = -1;
 
 	reset_stats(&old_total);
 	reset_stats(&cur_total);
@@ -364,7 +367,14 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 	old_stamp = new_stamp;
 	new_stamp = get_cached_time();
 
-	statlist_for_each(item, &pool_list) {
+	if (multithread_mode) {
+		thread_id = get_current_thread_id(multithread_mode);
+		pool_list_ptr = (struct StatList*)&threads[thread_id].pool_list;
+	} else {
+		pool_list_ptr = &pool_list;
+	}
+
+	statlist_for_each(item, pool_list_ptr) {
 		pool = container_of(item, PgPool, head);
 		pool->older_stats = pool->newer_stats;
 		pool->newer_stats = pool->stats;
@@ -374,60 +384,120 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 			stat_add(&old_total, &pool->older_stats);
 		}
 	}
-
+	
 	calc_average(&avg, &cur_total, &old_total);
 
-	if (cf_log_stats) {
-		log_info("stats: %" PRIu64 " xacts/s,"
-			 " %" PRIu64 " queries/s,"
-			 " %" PRIu64 " client parses/s,"
-			 " %" PRIu64 " server parses/s,"
-			 " %" PRIu64 " binds/s,"
-			 " in %" PRIu64 " B/s,"
-			 " out %" PRIu64 " B/s,"
-			 " xact %" PRIu64 " us,"
-			 " query %" PRIu64 " us,"
-			 " wait %" PRIu64 " us",
-			 avg.xact_count,
-			 avg.query_count,
-			 avg.ps_client_parse_count,
-			 avg.ps_server_parse_count,
-			 avg.ps_bind_count,
-			 avg.client_bytes, avg.server_bytes,
-			 avg.xact_time, avg.query_time,
-			 avg.wait_time);
+	if(multithread_mode){
+		if (cf_log_stats) {
+			log_info("[Thread %d] "
+				"stats: %" PRIu64 " xacts/s,"
+				" %" PRIu64 " queries/s,"
+				" %" PRIu64 " client parses/s,"
+				" %" PRIu64 " server parses/s,"
+				" %" PRIu64 " binds/s,"
+				" in %" PRIu64 " B/s,"
+				" out %" PRIu64 " B/s,"
+				" xact %" PRIu64 " us,"
+				" query %" PRIu64 " us,"
+				" wait %" PRIu64 " us",
+				thread_id, 
+				avg.xact_count,
+				avg.query_count,
+				avg.ps_client_parse_count,
+				avg.ps_server_parse_count,
+				avg.ps_bind_count,
+				avg.client_bytes, avg.server_bytes,
+				avg.xact_time, avg.query_time,
+				avg.wait_time);
+		}
+
+		sd_notifyf(0,
+			"[Thread %lu] "
+			"STATUS=stats: %" PRIu64 " xacts/s,"
+			" %" PRIu64 " queries/s,"
+			" %" PRIu64 " client parses/s,"
+			" %" PRIu64 " server parses/s,"
+			" %" PRIu64 " binds/s,"
+			" in %" PRIu64 " B/s,"
+			" out %" PRIu64 " B/s,"
+			" xact %" PRIu64 " μs,"
+			" query %" PRIu64 " μs,"
+			" wait %" PRIu64 " μs",
+			thread_id, 
+			avg.xact_count,
+			avg.query_count,
+			avg.ps_client_parse_count,
+			avg.ps_server_parse_count,
+			avg.ps_bind_count,
+			avg.client_bytes, avg.server_bytes,
+			avg.xact_time, avg.query_time,
+			avg.wait_time);
+	}else{
+		if (cf_log_stats) {
+			log_info(
+				"stats: %" PRIu64 " xacts/s,"
+				" %" PRIu64 " queries/s,"
+				" %" PRIu64 " client parses/s,"
+				" %" PRIu64 " server parses/s,"
+				" %" PRIu64 " binds/s,"
+				" in %" PRIu64 " B/s,"
+				" out %" PRIu64 " B/s,"
+				" xact %" PRIu64 " us,"
+				" query %" PRIu64 " us,"
+				" wait %" PRIu64 " us",
+				avg.xact_count,
+				avg.query_count,
+				avg.ps_client_parse_count,
+				avg.ps_server_parse_count,
+				avg.ps_bind_count,
+				avg.client_bytes, avg.server_bytes,
+				avg.xact_time, avg.query_time,
+				avg.wait_time);
+		}
+
+		sd_notifyf(0,
+			"STATUS=stats: %" PRIu64 " xacts/s,"
+			" %" PRIu64 " queries/s,"
+			" %" PRIu64 " client parses/s,"
+			" %" PRIu64 " server parses/s,"
+			" %" PRIu64 " binds/s,"
+			" in %" PRIu64 " B/s,"
+			" out %" PRIu64 " B/s,"
+			" xact %" PRIu64 " μs,"
+			" query %" PRIu64 " μs,"
+			" wait %" PRIu64 " μs",
+			avg.xact_count,
+			avg.query_count,
+			avg.ps_client_parse_count,
+			avg.ps_server_parse_count,
+			avg.ps_bind_count,
+			avg.client_bytes, avg.server_bytes,
+			avg.xact_time, avg.query_time,
+			avg.wait_time);
 	}
 
-	sd_notifyf(0,
-		   "STATUS=stats: %" PRIu64 " xacts/s,"
-		   " %" PRIu64 " queries/s,"
-		   " %" PRIu64 " client parses/s,"
-		   " %" PRIu64 " server parses/s,"
-		   " %" PRIu64 " binds/s,"
-		   " in %" PRIu64 " B/s,"
-		   " out %" PRIu64 " B/s,"
-		   " xact %" PRIu64 " μs,"
-		   " query %" PRIu64 " μs,"
-		   " wait %" PRIu64 " μs",
-		   avg.xact_count,
-		   avg.query_count,
-		   avg.ps_client_parse_count,
-		   avg.ps_server_parse_count,
-		   avg.ps_bind_count,
-		   avg.client_bytes, avg.server_bytes,
-		   avg.xact_time, avg.query_time,
-		   avg.wait_time);
 }
 
 void stats_setup(void)
 {
+	int thread_id = -1;
+	struct event* ev_stats_ptr;
+	struct event_base * base = pgb_event_base;
 	struct timeval period = { cf_stats_period, 0 };
 
 	new_stamp = get_cached_time();
 	old_stamp = new_stamp - USEC;
 
 	/* launch stats */
-	event_assign(&ev_stats, pgb_event_base, -1, EV_PERSIST, refresh_stats, NULL);
-	if (event_add(&ev_stats, &period) < 0)
+	if(multithread_mode){
+		base = (struct event_base *)pthread_getspecific(event_base_key);
+		thread_id = get_current_thread_id(multithread_mode);
+		ev_stats_ptr = &(threads[thread_id].ev_stats);
+	} else {
+		ev_stats_ptr = &ev_stats;
+	}
+
+	event_assign(ev_stats_ptr, base, -1, EV_PERSIST, refresh_stats, NULL);
+	if (event_add(ev_stats_ptr, &period) < 0)
 		log_warning("event_add failed: %s", strerror(errno));
 }
