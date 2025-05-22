@@ -670,14 +670,15 @@ static void check_limits(void)
 	struct List *item;
 	PgDatabase *db;
 	struct rlimit lim;
-	int total_users = 0;
-
-	fd_count = cf_max_client_conn + 10;
+	int total_users;
 	struct {
 		int *fd_count;
 		int total_users;
 	} ctx;
 
+	fd_count = cf_max_client_conn + 10;
+	total_users = 0;
+	
 	if(multithread_mode){
 		// TODO(beihao): implement`
 		total_users = statlist_count(&user_list);

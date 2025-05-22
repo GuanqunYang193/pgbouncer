@@ -304,7 +304,7 @@ int wait_threads(void){
 	FOR_EACH_THREAD(tmp_thread_id){	
 		int ret = pthread_join(threads[tmp_thread_id].worker, &retval);
 		 if (ret != 0) {
-			log_error(stderr, "pthread_join failed, err=%d\n", ret);
+			log_error("pthread_join failed, err=%d\n", ret);
 			return 1;
 		}
 

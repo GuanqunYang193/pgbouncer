@@ -2280,7 +2280,7 @@ static bool admin_show_totals(PgSocket *admin, const char *arg)
 		bool res = true;
 		FOR_EACH_THREAD(thread_id){
 			// TODO(beihao): thread safe version
-			show_stat_totals(admin, (struct StatList *)&(threads[thread_id].pool_list));
+			res &= show_stat_totals(admin, (struct StatList *)&(threads[thread_id].pool_list));
 		}
 		return res;
 	}
