@@ -488,7 +488,9 @@ static void pool_client_maint(PgPool *pool)
 	/* force timeouts for waiting queries */
 	if (cf_query_timeout > 0 || cf_query_wait_timeout > 0) {
 		statlist_for_each_safe(item, &pool->waiting_client_list, tmp) {
+			int* cf_shutdown_ptr;
 			client = container_of(item, PgSocket, head);
+
 			Assert(client->state == CL_WAITING || client->state == CL_WAITING_LOGIN);
 			if (client->query_start == 0) {
 				age = now - client->request_time;
@@ -496,11 +498,12 @@ static void pool_client_maint(PgPool *pool)
 			} else {
 				age = now - client->query_start;
 			}
-			int* cf_shutdown_ptr;
-			cf_shutdown_ptr = &cf_shutdown;
+			
 			if(multithread_mode){
 				int thread_id = get_current_thread_id(multithread_mode);
 				cf_shutdown_ptr = &(threads[thread_id].cf_shutdown);
+			} else {
+				cf_shutdown_ptr = &cf_shutdown;
 			}
 			if (*cf_shutdown_ptr == SHUTDOWN_WAIT_FOR_SERVERS) {
 				disconnect_client(client, true, "server shutting down");
@@ -864,6 +867,10 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	struct List *item, *tmp;
 	PgPool *pool;
 	PgDatabase *db;
+	struct StatList* peer_pool_list_ptr;
+	void* database_list_ptr;
+	void* pool_list_ptr;
+	struct StatList* autodatabase_idle_list_ptr;
 	int thread_id = get_current_thread_id(multithread_mode);
 
 	static unsigned int seq;
@@ -895,12 +902,10 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	 * many users.
 	   _	 */
 	
-	struct StatList* peer_pool_list_ptr;
 	peer_pool_list_ptr = (struct StatList*)GET_MULTITHREAD_LIST_PTR(peer_pool_list, thread_id);
-
-	void* database_list_ptr = GET_MULTITHREAD_LIST_PTR(database_list, thread_id);
-	void* pool_list_ptr = GET_MULTITHREAD_LIST_PTR(pool_list, thread_id);
-	struct StatList* autodatabase_idle_list_ptr = (struct StatList*)GET_MULTITHREAD_LIST_PTR(autodatabase_idle_list, thread_id);
+	database_list_ptr = GET_MULTITHREAD_LIST_PTR(database_list, thread_id);
+	pool_list_ptr = GET_MULTITHREAD_LIST_PTR(pool_list, thread_id);
+	autodatabase_idle_list_ptr = (struct StatList*)GET_MULTITHREAD_LIST_PTR(autodatabase_idle_list, thread_id);
 
 	/*
 	 * Creating new pools to enable `min_pool_size` enforcement even if
@@ -1049,7 +1054,7 @@ void kill_pool(PgPool *pool, int thread_id)
 	list_del(&pool->map_head);
 	if(multithread_mode){
 		// TODO check locked
-		statlist_remove(&(threads[thread_id].pool_list), &pool->head);
+		thread_safe_statlist_remove(&(threads[thread_id].pool_list), &pool->head);
 		varcache_clean(&pool->orig_vars);
 		slab_free(threads[thread_id].var_list_cache, pool->orig_vars.var_list);
 		slab_free(threads[thread_id].pool_cache, pool);

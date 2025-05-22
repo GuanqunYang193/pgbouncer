@@ -2977,7 +2977,11 @@ void tag_autodb_dirty(void)
 			thread_safe_statlist_iterate(&(threads[thread_id].database_list), tag_autodb_dirty_cb, &thread_id);
 		}
 		FOR_EACH_THREAD(thread_id){
-			thread_safe_statlist_iterate(&(threads[thread_id].autodatabase_idle_list), tag_autodb_dirty_cb, &thread_id);
+			statlist_for_each_safe(item, &autodatabase_idle_list, tmp) {
+				db = container_of(item, PgDatabase, head);
+				if (db->db_auto)
+					register_auto_database(db->name, -1);
+			}
 		}
 
 		/*
@@ -3024,10 +3028,10 @@ static void tag_host_addr_dirty_cb(struct List *item, void *ctx) {
 	PgPool *pool = container_of(item, PgPool, head);
 	struct {
 		const char *host;
-		const struct sockaddr *sa;
+		PgAddr *addr;
 	} *data = ctx;
 	if (pool->db->host && strcmp(data->host, pool->db->host) == 0) {
-		for_each_server_filtered(pool, tag_dirty, server_remote_addr_filter, data->sa);
+		for_each_server_filtered(pool, tag_dirty, server_remote_addr_filter, data->addr);
 	}
 }
 
@@ -3043,8 +3047,8 @@ void tag_host_addr_dirty(const char *host, const struct sockaddr *sa)
 		FOR_EACH_THREAD(thread_id){
 			struct {
 				const char *host;
-				const struct sockaddr *sa;
-			} data = {host, sa};
+				PgAddr *addr;
+			} data = {host, &addr};
 			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), tag_host_addr_dirty_cb, &data);
 		}
 	}else{
@@ -3108,7 +3112,10 @@ static void objects_cleanup_multithread(void)
 
 	FOR_EACH_THREAD(thread_id){
 		log_info("objects_cleanup_multithread: thread_id=%d", thread_id);
-		thread_safe_statlist_iterate(&(threads[thread_id].autodatabase_idle_list), kill_database_cb, &thread_id);
+		statlist_for_each_safe(item, &(threads[thread_id].autodatabase_idle_list), tmp) {
+			PgDatabase *db = container_of(item, PgDatabase, head);
+			kill_database(db, thread_id);
+		}
 		thread_safe_statlist_iterate(&(threads[thread_id].database_list), kill_database_cb, &thread_id);
 		statlist_for_each_safe(item, &(threads[thread_id].justfree_client_list), tmp) {
 			PgSocket *client = container_of(item, PgSocket, head);
