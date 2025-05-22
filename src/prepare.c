@@ -104,12 +104,15 @@ static PgClientPreparedStatement *create_client_prepared_statement(char const *n
  */
 static PgServerPreparedStatement *create_server_prepared_statement(PgPreparedStatement *ps)
 {
-	struct Slab *server_prepared_statement_cache_ = server_prepared_statement_cache;
+	PgServerPreparedStatement *server_ps;
+	struct Slab *server_prepared_statement_cache_ = NULL;
 	if(multithread_mode){
 		int thread_id = get_current_thread_id(multithread_mode);
 		server_prepared_statement_cache_ = threads[thread_id].server_prepared_statement_cache;
+	} else {
+		server_prepared_statement_cache_ = server_prepared_statement_cache;
 	}
-	PgServerPreparedStatement *server_ps = slab_alloc(server_prepared_statement_cache_);
+	server_ps = slab_alloc(server_prepared_statement_cache_);
 	if (server_ps == NULL)
 		return NULL;
 
@@ -195,11 +198,6 @@ void free_server_prepared_statement(PgServerPreparedStatement *server_ps)
 	if (--server_ps->ps->use_count == 0) {
 		HASH_DEL(prepared_statements, server_ps->ps);
 		free(server_ps->ps);
-	}
-	struct Slab *server_prepared_statement_cache_ = server_prepared_statement_cache;
-	if(multithread_mode){
-		int thread_id = get_current_thread_id(multithread_mode);
-		server_prepared_statement_cache_ = threads[thread_id].server_prepared_statement_cache;
 	}
 	slab_free(server_prepared_statement_cache, server_ps);
 }

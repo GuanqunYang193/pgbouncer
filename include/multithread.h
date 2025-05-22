@@ -115,10 +115,10 @@ extern Thread *threads;
 extern int next_thread;
 
 void signal_setup(struct event_base * base, struct SignalEvent* signal_event, int thread_id);
-void start_threads();
-void init_threads();
-int wait_threads();
-void clean_threads();
+void start_threads(void);
+void init_threads(void);
+int wait_threads(void);
+void clean_threads(void);
 void request_pause_thread(int thread_id);
 bool thread_paused(int thread_id);
 void resume_thread(int thread_id);

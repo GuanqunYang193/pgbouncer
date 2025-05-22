@@ -334,7 +334,7 @@ static const char *conninfo(const PgSocket *sk)
 	}
 }
 
-void accept_client_handler(bool is_unix, int fd){
+static void accept_client_handler(bool is_unix, int fd){
 	PgSocket *client;
 	if (is_unix) {
 		client = accept_client(fd, true);
@@ -350,6 +350,7 @@ void accept_client_handler(bool is_unix, int fd){
 static void pool_accept(evutil_socket_t sock, short flags, void *arg)
 {
 	struct ListenSocket *ls = arg;
+	struct ClientRequest client_request;
 	int fd;
 	union {
 		struct sockaddr_in in;
@@ -384,7 +385,8 @@ loop:
 		return;
 	}
 	log_noise("new fd from accept=%d", fd);
-	struct ClientRequest client_request = {fd,is_unix};
+	client_request.fd = fd;
+	client_request.is_unix = is_unix;
 
 	if(multithread_mode){
 		// FIXME non-block pipe strategy
@@ -407,7 +409,7 @@ loop:
 	goto loop;
 }
 
-void handle_request(evutil_socket_t fd, short event, void* arg){
+static void handle_request(evutil_socket_t fd, short event, void* arg){
 	struct ClientRequest client_request; 
 	read(fd, &client_request, sizeof(client_request));
     if (client_request.fd < 0) {

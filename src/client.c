@@ -354,7 +354,7 @@ static bool finish_set_pool(PgSocket *client, bool takeover)
 			char infobuf[96] = "";
 			tls_get_connection_info(client->sbuf.tls, infobuf, sizeof infobuf);
 			if(multithread_mode){
-				slog_info(client, "[Thread %ld] login attempt: db=%s user=%s tls=%s replication=%s",
+				slog_info(client, "[Thread %d] login attempt: db=%s user=%s tls=%s replication=%s",
 					get_current_thread_id(multithread_mode),
 					client->db->name,
 					client->login_user_credentials->name,
@@ -369,7 +369,7 @@ static bool finish_set_pool(PgSocket *client, bool takeover)
 			}
 		} else {
 			if(multithread_mode){
-				slog_info(client, "[Thread %ld] login attempt: db=%s user=%s tls=no replication=%s",
+				slog_info(client, "[Thread %d] login attempt: db=%s user=%s tls=no replication=%s",
 				  get_current_thread_id(multithread_mode), client->db->name, client->login_user_credentials->name,
 				  replication_type_parameters[client->replication]);
 			}else{
@@ -508,9 +508,10 @@ bool check_user_connection_count(PgSocket *client)
 
 bool set_pool(PgSocket *client, const char *dbname, const char *username, const char *password, bool takeover)
 {
+	int thread_id;
 	Assert((password && takeover) || (!password && !takeover));
-
-	int thread_id = get_current_thread_id(multithread_mode);
+	
+	thread_id = get_current_thread_id(multithread_mode);
 	/* find database */
 	client->db = find_or_register_database(client, dbname, thread_id);
 	if (!client->db) {
@@ -810,6 +811,7 @@ static bool set_startup_options(PgSocket *client, const char *options)
 {
 	char arg_buf[400];
 	struct MBuf arg;
+	int thread_id;
 	const char *position = options;
 
 	if (client->replication) {
@@ -837,7 +839,7 @@ static bool set_startup_options(PgSocket *client, const char *options)
 
 	mbuf_init_fixed_writer(&arg, arg_buf, sizeof(arg_buf));
 	slog_debug(client, "received options: %s", options);
-	int thread_id = get_current_thread_id(multithread_mode);
+	thread_id = get_current_thread_id(multithread_mode);
 
 	while (*position) {
 		const char *start_position = position;
@@ -896,6 +898,7 @@ static void set_appname(PgSocket *client, const char *app_name)
 {
 	char buf[400], abuf[300];
 	const char *details;
+	int thread_id;
 
 	if (cf_application_name_add_host) {
 		/* give app a name */
@@ -909,7 +912,7 @@ static void set_appname(PgSocket *client, const char *app_name)
 	}
 	if (app_name) {
 		slog_debug(client, "using application_name: %s", app_name);
-		int thread_id = get_current_thread_id(multithread_mode);
+		thread_id = get_current_thread_id(multithread_mode);
 		varcache_set(&client->vars, "application_name", app_name, thread_id);
 	}
 }
@@ -937,6 +940,7 @@ static bool decide_startup_pool(PgSocket *client, PktHdr *pkt)
 	const char *username = NULL, *dbname = NULL;
 	const char *key, *val;
 	bool ok;
+	int thread_id;
 	bool appname_found = false;
 	struct MBuf unsupported_protocol_extensions;
 	int unsupported_protocol_extensions_count = 0;
@@ -964,7 +968,7 @@ static bool decide_startup_pool(PgSocket *client, PktHdr *pkt)
 	}
 
 	pkt->data.read_pos = original_read_pos;
-	int thread_id = get_current_thread_id(multithread_mode);
+	thread_id = get_current_thread_id(multithread_mode);
 
 	while (1) {
 		ok = mbuf_get_string(&pkt->data, &key);

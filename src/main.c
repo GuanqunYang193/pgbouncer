@@ -404,8 +404,10 @@ static bool set_defer_accept(struct CfValue *cv, const char *val)
 
 static void set_db_dead_cb(struct List *item, void *ctx) {
 	PgDatabase *db;
+	bool flag;
+
 	db = container_of(item, PgDatabase, head);
-	bool flag = *(bool *)ctx;
+	flag = *(bool *)ctx;
 
 	if (db->admin)
 		return;
@@ -642,13 +644,18 @@ static void write_pidfile(void)
 }
 
 static void count_fd_cb(struct List *item, void *ctx) {
-    PgDatabase *db = container_of(item, PgDatabase, head);
+    PgDatabase *db;
+	int *fd_cnt;
+	int total_users;
 	struct {
         int *fd_cnt;
         int total_users;
-    } *data = (struct { int *fd_cnt; int total_users; } *)ctx;
-    int *fd_cnt = data->fd_cnt;
-    int total_users = data->total_users;
+    } *data;
+
+	db = container_of(item, PgDatabase, head);
+	data = ctx;
+	fd_cnt = data->fd_cnt;
+	total_users = data->total_users;
     if (db->forced_user_credentials)
         *fd_cnt += (db->pool_size >= 0 ? db->pool_size : cf_default_pool_size);
 	else
@@ -658,9 +665,20 @@ static void count_fd_cb(struct List *item, void *ctx) {
 /* just print out max files, in the future may warn if something is off */
 static void check_limits(void)
 {
+	int fd_count;
+	int err;
+	struct List *item;
+	PgDatabase *db;
 	struct rlimit lim;
-	int total_users = 0;
+	int total_users;
+	struct {
+		int *fd_count;
+		int total_users;
+	} ctx;
 
+	fd_count = cf_max_client_conn + 10;
+	total_users = 0;
+	
 	if(multithread_mode){
 		// TODO(beihao): implement`
 		total_users = statlist_count(&user_list);
@@ -668,10 +686,8 @@ static void check_limits(void)
 		total_users = statlist_count(&user_list);
 	}
 
-	int fd_count;
-	int err;
-	struct List *item;
-	PgDatabase *db;
+	ctx.fd_count = &fd_count;
+	ctx.total_users = total_users;
 
 	log_noise("event: %d, SBuf: %d, PgSocket: %d, IOBuf: %d",
 		  (int)sizeof(struct event), (int)sizeof(SBuf),
@@ -685,11 +701,6 @@ static void check_limits(void)
 	}
 
 	/* calculate theoretical max, +10 is just in case */
-	fd_count = cf_max_client_conn + 10;
-	struct {
-		int *fd_count;
-		int total_users;
-	} ctx = { &fd_count, total_users };
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
 			thread_safe_statlist_iterate(&(threads[thread_id].database_list), count_fd_cb, &ctx);

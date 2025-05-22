@@ -247,7 +247,7 @@ void varcache_set_canonical(PgSocket *server, PgSocket *client)
 		server_val = server->vars.var_list[lk->idx];
 		client_val = client->vars.var_list[lk->idx];
 		if (client_val && server_val && client_val != server_val) {
-			log_error(client, "varcache_set_canonical: setting %s to its canonical version %s -> %s",
+			slog_debug(client, "varcache_set_canonical: setting %s to its canonical version %s -> %s",
 				   lk->name, client_val->str, server_val->str);
 			strpool_incref(server_val);
 			strpool_decref(client_val);
@@ -265,7 +265,7 @@ void varcache_apply_startup(PktBuf *pkt, PgSocket *client)
 		if (!val)
 			continue;
 
-		log_error(client, "varcache_apply_startup: %s=%s", lk->name, val->str);
+		slog_debug(client, "varcache_apply_startup: %s=%s", lk->name, val->str);
 		pktbuf_put_string(pkt, lk->name);
 		pktbuf_put_string(pkt, val->str);
 	}

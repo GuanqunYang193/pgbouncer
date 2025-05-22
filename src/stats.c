@@ -358,6 +358,8 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 	PgPool *pool;
 	PgStats old_total, cur_total;
 	PgStats avg;
+	struct StatList* pool_list_ptr = NULL;
+	int thread_id = -1;
 
 	reset_stats(&old_total);
 	reset_stats(&cur_total);
@@ -365,11 +367,11 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 	old_stamp = new_stamp;
 	new_stamp = get_cached_time();
 
-	struct StatList* pool_list_ptr = &pool_list;
-	int thread_id = -1;
-	if(multithread_mode){
+	if (multithread_mode) {
 		thread_id = get_current_thread_id(multithread_mode);
-		pool_list_ptr = &threads[thread_id].pool_list;
+		pool_list_ptr = (struct StatList*)&threads[thread_id].pool_list;
+	} else {
+		pool_list_ptr = &pool_list;
 	}
 
 	statlist_for_each(item, pool_list_ptr) {
@@ -387,7 +389,7 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 
 	if(multithread_mode){
 		if (cf_log_stats) {
-			log_info("[Thread %lu] "
+			log_info("[Thread %d] "
 				"stats: %" PRIu64 " xacts/s,"
 				" %" PRIu64 " queries/s,"
 				" %" PRIu64 " client parses/s,"
@@ -478,18 +480,21 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 
 void stats_setup(void)
 {
+	int thread_id = -1;
+	struct event* ev_stats_ptr;
+	struct event_base * base = pgb_event_base;
 	struct timeval period = { cf_stats_period, 0 };
 
 	new_stamp = get_cached_time();
 	old_stamp = new_stamp - USEC;
 
 	/* launch stats */
-	struct event_base * base = pgb_event_base;
-	struct event* ev_stats_ptr = &ev_stats;
 	if(multithread_mode){
 		base = (struct event_base *)pthread_getspecific(event_base_key);
-		int thread_id = get_current_thread_id(multithread_mode);
+		thread_id = get_current_thread_id(multithread_mode);
 		ev_stats_ptr = &(threads[thread_id].ev_stats);
+	} else {
+		ev_stats_ptr = &ev_stats;
 	}
 
 	event_assign(ev_stats_ptr, base, -1, EV_PERSIST, refresh_stats, NULL);

@@ -246,14 +246,16 @@ fail:
 }
 
 bool parse_database_multithread(void *base, const char *name, const char *connstr){
-	if(multithread_mode){
-		FOR_EACH_THREAD(thread_id){
-			parse_database(base, name, connstr, thread_id);
-		}
-	}else{
-		parse_database(base, name, connstr, -1);
+	bool res = true;
+
+	if (!multithread_mode) {
+		return parse_database(base, name, connstr, -1);
 	}
-	return true;
+
+	FOR_EACH_THREAD(thread_id){
+		res &= parse_database(base, name, connstr, thread_id);
+	}
+	return res;
 }
 
 /* fill PgDatabase from connstr */
