@@ -262,8 +262,8 @@ void init_objects_multithread(void)
 		if (!threads[thread_id].outstanding_request_cache)
 			fatal("cannot create initial outstanding_request_cache");
 	}
-	thread_safe_user_cache = thread_safe_slab_create("thread_safe_user_cache", sizeof(PgGlobalUser), 0, NULL, USUAL_ALLOC);
-	thread_safe_credentials_cache = thread_safe_slab_create("thread_safe_credentials_cache", sizeof(PgCredentials), 0, NULL, USUAL_ALLOC);
+	thread_safe_user_cache = thread_safe_slab_create("thread_safe_user_cache", sizeof(PgGlobalUser), 0, NULL, USUAL_ALLOC, false);
+	thread_safe_credentials_cache = thread_safe_slab_create("thread_safe_credentials_cache", sizeof(PgCredentials), 0, NULL, USUAL_ALLOC, false);
 	peer_cache = slab_create("peer_cache", sizeof(PgDatabase), 0, NULL, USUAL_ALLOC);
 
 	if (!peer_cache)
