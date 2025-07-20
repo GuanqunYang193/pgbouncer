@@ -75,7 +75,7 @@ struct DNSContext *adns;
 struct HBA *parsed_hba;
 struct Ident *parsed_ident;
 
-struct SignalEvent main_signal_event;
+struct SignalEvent signal_event;
 /*
  * configuration storage
  */
@@ -1038,7 +1038,7 @@ int main(int argc, char *argv[])
 	if (!(pgb_event_base = event_base_new()))
 		die("event_base_new() failed");
     dns_setup();
-	signal_setup(pgb_event_base, &main_signal_event, -1);
+	signal_setup(pgb_event_base, &signal_event);
 	if(!multithread_mode){
 		janitor_setup();
 		stats_setup();

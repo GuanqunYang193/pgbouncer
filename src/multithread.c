@@ -14,6 +14,13 @@ pthread_key_t event_base_key;
 pthread_key_t thread_pointer;
 Thread *threads;
 
+void signal_threads(WorkdersignalEvents* worker_signal_events, int signal_pipe[2]){
+	if(!multithread_mode){
+		return;
+	}
+	write(signal_pipe[1], "x", 1); 
+}
+
 void handle_sigterm_main(evutil_socket_t sock, short flags, void *arg)
 {
 	if (cf_shutdown) {
@@ -29,13 +36,20 @@ void handle_sigterm_main(evutil_socket_t sock, short flags, void *arg)
 		die("suspend was in progress, going down immediately");
 	cf_shutdown = SHUTDOWN_IMMEDIATE;
 	cleanup_sockets();
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			signal_threads(&(threads[thread_id].worker_signal_events),threads[thread_id].worker_signal_events.pipe_sigterm);
+		}
+	}
 }
 
 void handle_sigterm(evutil_socket_t sock, short flags, void *arg)
 {
 	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	char buf[1];
+	read(threads[this_thread->thread_id].worker_signal_events.pipe_sigterm[0], buf, sizeof(buf));
 	if (this_thread->cf_shutdown) {
-		log_info("got SIGTERM while shutting down, fast exit");
+		log_info("[Thread %ld] got SIGTERM while shutting down, fast exit", this_thread->thread_id);
 		/* pidfile cleanup happens via atexit() */
 		exit(0);
 	}
@@ -59,14 +73,21 @@ static void handle_sigint_main(evutil_socket_t sock, short flags, void *arg)
 	cf_pause_mode = P_PAUSE;
 	cf_shutdown = SHUTDOWN_IMMEDIATE;
 	cleanup_sockets();
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			signal_threads(&(threads[thread_id].worker_signal_events),threads[thread_id].worker_signal_events.pipe_sigint);
+		}
+	}
 }
 
 
 static void handle_sigint(evutil_socket_t sock, short flags, void *arg)
 {
 	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	char buf[1];
+	read(threads[this_thread->thread_id].worker_signal_events.pipe_sigint[0], buf, sizeof(buf));
 	if (this_thread->cf_shutdown) {
-		log_info("got SIGINT while shutting down, fast exit");
+		log_info("[Thread %ld] got SIGINT while shutting down, fast exit", this_thread->thread_id);
 		/* pidfile cleanup happens via atexit() */
 		exit(0);
 	}
@@ -80,6 +101,11 @@ static void handle_sigquit(evutil_socket_t sock, short flags, void *arg)
 {
 	log_info("got SIGQUIT, fast exit");
 	/* pidfile cleanup happens via atexit() */
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			signal_threads(&(threads[thread_id].worker_signal_events),threads[thread_id].worker_signal_events.pipe_sigquit);
+		}
+	}
 	exit(0);
 }
 
@@ -90,6 +116,11 @@ static void handle_sigusr1(int sock, short flags, void *arg)
 		cf_pause_mode = P_PAUSE;
 	} else {
 		log_info("got SIGUSR1, but already paused/suspended");
+	}
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			signal_threads(&(threads[thread_id].worker_signal_events),threads[thread_id].worker_signal_events.pipe_sigusr1);
+		}
 	}
 }
 
@@ -111,6 +142,11 @@ static void handle_sigusr2(int sock, short flags, void *arg)
 		break;
 	case P_NONE:
 		log_info("got SIGUSR2, but not paused/suspended");
+	}
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			signal_threads(&(threads[thread_id].worker_signal_events), threads[thread_id].worker_signal_events.pipe_sigusr2);
+		}
 	}
 }
 
@@ -140,11 +176,16 @@ static void handle_sighup(int sock, short flags, void *arg)
 	if (!sbuf_tls_setup())
 		log_error("TLS configuration could not be reloaded, keeping old configuration");
 	sd_notify(0, "READY=1");
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			signal_threads(&(threads[thread_id].worker_signal_events), threads[thread_id].worker_signal_events.pipe_sighup);
+		}
+	}
 }
 #endif
 
 
-void signal_setup(struct event_base * base, struct SignalEvent* signal_event, int thread_id)
+void signal_setup(struct event_base * base, struct SignalEvent* signal_event)
 {
 	int err;
 
@@ -160,51 +201,120 @@ void signal_setup(struct event_base * base, struct SignalEvent* signal_event, in
 
 	/* install handlers */
 
-	if(thread_id == -1) {
-		evsignal_assign(&(signal_event->ev_sigusr1), base, SIGUSR1, handle_sigusr1, NULL);
-		err = evsignal_add(&(signal_event->ev_sigusr1), NULL);
-		if (err < 0)
-			fatal_perror("evsignal_add");
-	}
+	evsignal_assign(&(signal_event->ev_sigusr1), base, SIGUSR1, handle_sigusr1, NULL);
+	err = evsignal_add(&(signal_event->ev_sigusr1), NULL);
+	if (err < 0)
+		fatal_perror("evsignal_add");
 
-	if(thread_id == -1) {
-		evsignal_assign(&(signal_event->ev_sigusr2), base, SIGUSR2, handle_sigusr2, NULL);
-		err = evsignal_add(&(signal_event->ev_sigusr2), NULL);
-		if (err < 0)
-			fatal_perror("evsignal_add");
-	}
+	evsignal_assign(&(signal_event->ev_sigusr2), base, SIGUSR2, handle_sigusr2, NULL);
+	err = evsignal_add(&(signal_event->ev_sigusr2), NULL);
+	if (err < 0)
+		fatal_perror("evsignal_add");
 
-	if(thread_id == -1) {
-		evsignal_assign(&(signal_event->ev_sighup), base, SIGHUP, handle_sighup, NULL);
-		err = evsignal_add(&(signal_event->ev_sighup), NULL);
-		if (err < 0)
-			fatal_perror("evsignal_add");
-	}
+	evsignal_assign(&(signal_event->ev_sighup), base, SIGHUP, handle_sighup, NULL);
+	err = evsignal_add(&(signal_event->ev_sighup), NULL);
+	if (err < 0)
+		fatal_perror("evsignal_add");
 
 	evsignal_assign(&(signal_event->ev_sigquit), base, SIGQUIT, handle_sigquit, NULL);
 	err = evsignal_add(&(signal_event->ev_sigquit), NULL);
 	if (err < 0)
 		fatal_perror("evsignal_add");
 #endif
-	if(thread_id == -1)
-		evsignal_assign(&(signal_event->ev_sigterm), base, SIGTERM, handle_sigterm_main, NULL);
-	else
-		evsignal_assign(&(signal_event->ev_sigterm), base, SIGTERM, handle_sigterm, NULL);
-
+	
+	evsignal_assign(&(signal_event->ev_sigterm), base, SIGTERM, handle_sigterm_main, NULL);
 	err = evsignal_add(&(signal_event->ev_sigterm), NULL);
 	if (err < 0)
 		fatal_perror("evsignal_add");
 
-	if(thread_id == -1)
-		evsignal_assign(&(signal_event->ev_sigint), base, SIGINT, handle_sigint_main, NULL);
-	else
-		evsignal_assign(&(signal_event->ev_sigint), base, SIGINT, handle_sigint, NULL);
-	
+	evsignal_assign(&(signal_event->ev_sigint), base, SIGINT, handle_sigint_main, NULL);
 	err = evsignal_add(&(signal_event->ev_sigint), NULL);
 	if (err < 0)
 		fatal_perror("evsignal_add");
+
+	if(multithread_mode){
+		FOR_EACH_THREAD(thread_id){
+			err = pipe(threads[thread_id].worker_signal_events.pipe_sigint);
+			if(err < 0)
+				fatal_perror("multithread signal pipe");
+			evutil_make_socket_nonblocking(threads[thread_id].worker_signal_events.pipe_sigint[0]);
+			evutil_make_socket_nonblocking(threads[thread_id].worker_signal_events.pipe_sigint[1]);
+
+			err = pipe(threads[thread_id].worker_signal_events.pipe_sigterm);
+			if(err < 0)
+				fatal_perror("multithread signal pipe");
+			evutil_make_socket_nonblocking(threads[thread_id].worker_signal_events.pipe_sigterm[0]);
+			evutil_make_socket_nonblocking(threads[thread_id].worker_signal_events.pipe_sigterm[1]);
+
+#ifndef WIN32
+			err = pipe(threads[thread_id].worker_signal_events.pipe_sigusr1);
+			if(err < 0)
+				fatal_perror("multithread signal pipe");
+			evutil_make_socket_nonblocking(threads[thread_id].worker_signal_events.pipe_sigusr1[0]);
+			evutil_make_socket_nonblocking(threads[thread_id].worker_signal_events.pipe_sigusr1[1]);
+			
+
+			err = pipe(threads[thread_id].worker_signal_events.pipe_sigusr2);
+			if(err < 0)
+				fatal_perror("multithread signal pipe");
+			evutil_make_socket_nonblocking(threads[thread_id].worker_signal_events.pipe_sigusr2[0]);
+			evutil_make_socket_nonblocking(threads[thread_id].worker_signal_events.pipe_sigusr2[1]);
+
+			err = pipe(threads[thread_id].worker_signal_events.pipe_sighup);
+			if(err < 0)
+				fatal_perror("multithread signal pipe");
+			evutil_make_socket_nonblocking(threads[thread_id].worker_signal_events.pipe_sighup[0]);
+			evutil_make_socket_nonblocking(threads[thread_id].worker_signal_events.pipe_sighup[1]);
+
+			err = pipe(threads[thread_id].worker_signal_events.pipe_sigquit);
+			if(err < 0)
+				fatal_perror("multithread signal pipe");
+			evutil_make_socket_nonblocking(threads[thread_id].worker_signal_events.pipe_sigquit[0]);
+			evutil_make_socket_nonblocking(threads[thread_id].worker_signal_events.pipe_sigquit[1]);
+#endif	
+		}
+	}
 }
 
+
+static void worker_signal_setup(struct event_base * base, int thread_id)
+{
+	spin_lock_init(&(threads[thread_id].worker_signal_events.signal_lock));
+	int err;
+#ifndef WIN32
+
+	threads[thread_id].worker_signal_events.ev_sigusr1 = event_new(base, threads[thread_id].worker_signal_events.pipe_sigusr1[0], EV_READ | EV_PERSIST, handle_sigusr1, base);
+    err = event_add(threads[thread_id].worker_signal_events.ev_sigusr1, NULL);
+	if (err < 0)
+		fatal_perror("multithread signal event add");
+
+	threads[thread_id].worker_signal_events.ev_sigusr2 = event_new(base, threads[thread_id].worker_signal_events.pipe_sigusr2[0], EV_READ | EV_PERSIST, handle_sigusr2, base);
+    err = event_add(threads[thread_id].worker_signal_events.ev_sigusr2, NULL);
+	if (err < 0)
+		fatal_perror("multithread signal event add");
+
+	threads[thread_id].worker_signal_events.ev_sighup = event_new(base, threads[thread_id].worker_signal_events.pipe_sighup[0], EV_READ | EV_PERSIST, handle_sighup, base);
+    err = event_add(threads[thread_id].worker_signal_events.ev_sighup, NULL);
+	if (err < 0)
+		fatal_perror("multithread signal event add");
+
+	threads[thread_id].worker_signal_events.ev_sigquit = event_new(base, threads[thread_id].worker_signal_events.pipe_sigquit[0], EV_READ | EV_PERSIST, handle_sigquit, base);
+    err = event_add(threads[thread_id].worker_signal_events.ev_sigquit, NULL);
+	if (err < 0)
+		fatal_perror("multithread signal event add");
+#endif
+
+	threads[thread_id].worker_signal_events.ev_sigterm = event_new(base, threads[thread_id].worker_signal_events.pipe_sigterm[0], EV_READ | EV_PERSIST, handle_sigterm, base);
+    err = event_add(threads[thread_id].worker_signal_events.ev_sigterm, NULL);
+	if (err < 0)
+		fatal_perror("multithread signal event add");
+
+
+	threads[thread_id].worker_signal_events.ev_sigint = event_new(base, threads[thread_id].worker_signal_events.pipe_sigint[0], EV_READ | EV_PERSIST, handle_sigint, base);
+    err = event_add(threads[thread_id].worker_signal_events.ev_sigint, NULL);
+	if (err < 0)
+		fatal_perror("multithread signal event add");
+}
 
 void* worker_func(void* arg)
 {
@@ -221,7 +331,7 @@ void* worker_func(void* arg)
     pthread_setspecific(event_base_key, base);
 
     thread_pooler_setup();
-	signal_setup(base, &(this_thread->signal_event), this_thread->thread_id);
+	worker_signal_setup(base, this_thread->thread_id);
 	janitor_setup();
 	stats_setup();
 

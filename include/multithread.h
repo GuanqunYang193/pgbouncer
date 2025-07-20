@@ -40,6 +40,27 @@ typedef struct SignalEvent{
 #endif
 } SignalEvent;
 
+
+typedef struct WorkdersignalEvents{
+
+    int pipe_sigterm[2];
+    int pipe_sigint[2];
+    struct event* ev_sigterm;
+    struct event* ev_sigint;
+
+#ifndef WIN32
+    int pipe_sigquit[2];
+    int pipe_sigusr1[2];
+    int pipe_sigusr2[2];
+    int pipe_sighup[2];
+    struct event* ev_sigquit;
+    struct event* ev_sigusr1;
+    struct event* ev_sigusr2;
+    struct event* ev_sighup;
+#endif
+
+} WorkdersignalEvents;
+
 enum ThreadStatus{
     THREAD_RUNNING,         // resumed
     THREAD_REQUEST_PAUSE,   // request sent but not paused
@@ -64,7 +85,7 @@ typedef struct Thread {
     struct StatList login_client_list;
     struct ThreadSafeStatList pool_list;
     struct StatList peer_pool_list;
-    struct SignalEvent signal_event;
+    struct WorkdersignalEvents worker_signal_events;
     struct ThreadSafeStatList database_list;
     struct StatList autodatabase_idle_list;
     struct Slab *client_cache;
@@ -114,7 +135,7 @@ typedef struct ClientRequest {
 extern Thread *threads;
 extern int next_thread;
 
-void signal_setup(struct event_base * base, struct SignalEvent* signal_event, int thread_id);
+void signal_setup(struct event_base * base, struct SignalEvent* signal_event);
 void start_threads(void);
 void init_threads(void);
 int wait_threads(void);
