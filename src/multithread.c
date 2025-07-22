@@ -279,7 +279,6 @@ void signal_setup(struct event_base * base, struct SignalEvent* signal_event)
 
 static void worker_signal_setup(struct event_base * base, int thread_id)
 {
-	spin_lock_init(&(threads[thread_id].worker_signal_events.signal_lock));
 	int err;
 #ifndef WIN32
 
