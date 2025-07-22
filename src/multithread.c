@@ -97,7 +97,7 @@ static void handle_sigint(evutil_socket_t sock, short flags, void *arg)
 
 #ifndef WIN32
 
-static void handle_sigquit(evutil_socket_t sock, short flags, void *arg)
+static void handle_sigquit_main(evutil_socket_t sock, short flags, void *arg)
 {
 	log_info("got SIGQUIT, fast exit");
 	/* pidfile cleanup happens via atexit() */
@@ -106,7 +106,19 @@ static void handle_sigquit(evutil_socket_t sock, short flags, void *arg)
 			signal_threads(&(threads[thread_id].worker_signal_events),threads[thread_id].worker_signal_events.pipe_sigquit);
 		}
 	}
+	FOR_EACH_THREAD(thread_id){
+		pthread_join(threads[thread_id].worker, NULL);
+	}
 	exit(0);
+}
+
+static void handle_sigquit_worker(evutil_socket_t sock, short flags, void *arg)
+{
+	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
+	char buf[1];
+	read(threads[this_thread->thread_id].worker_signal_events.pipe_sigquit[0], buf, sizeof(buf));
+	log_info("[Thread %ld] got SIGQUIT, fast exit", this_thread->thread_id);
+	pthread_exit(0);
 }
 
 static void handle_sigusr1(int sock, short flags, void *arg)
@@ -216,7 +228,7 @@ void signal_setup(struct event_base * base, struct SignalEvent* signal_event)
 	if (err < 0)
 		fatal_perror("evsignal_add");
 
-	evsignal_assign(&(signal_event->ev_sigquit), base, SIGQUIT, handle_sigquit, NULL);
+	evsignal_assign(&(signal_event->ev_sigquit), base, SIGQUIT, handle_sigquit_main, NULL);
 	err = evsignal_add(&(signal_event->ev_sigquit), NULL);
 	if (err < 0)
 		fatal_perror("evsignal_add");
@@ -297,7 +309,7 @@ static void worker_signal_setup(struct event_base * base, int thread_id)
 	if (err < 0)
 		fatal_perror("multithread signal event add");
 
-	threads[thread_id].worker_signal_events.ev_sigquit = event_new(base, threads[thread_id].worker_signal_events.pipe_sigquit[0], EV_READ | EV_PERSIST, handle_sigquit, base);
+	threads[thread_id].worker_signal_events.ev_sigquit = event_new(base, threads[thread_id].worker_signal_events.pipe_sigquit[0], EV_READ | EV_PERSIST, handle_sigquit_worker, base);
     err = event_add(threads[thread_id].worker_signal_events.ev_sigquit, NULL);
 	if (err < 0)
 		fatal_perror("multithread signal event add");
