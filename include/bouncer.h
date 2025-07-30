@@ -28,6 +28,7 @@
 #include <usual/statlist.h>
 #include <usual/aatree.h>
 #include <usual/socket.h>
+#include <usual/spinlock.h>
 
 #include <event2/event.h>
 #include <event2/event_struct.h>

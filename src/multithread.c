@@ -409,6 +409,8 @@ void init_threads(void){
 		return;
 	log_info("allocating %d threads.", arg_thread_number);
 	threads = calloc(arg_thread_number, sizeof(Thread));
+	spin_lock_init(&prepared_statements_spinlock_);
+
 	FOR_EACH_THREAD(thread_id){	
 		init_thread(thread_id);
 	}

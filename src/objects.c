@@ -56,6 +56,8 @@ struct AATree pam_user_tree;
  */
 PgPreparedStatement *prepared_statements = NULL;
 
+SpinLock prepared_statements_spinlock_;
+
 /*
  * client and server objects will be pre-allocated
  * they are always in either active or free lists
