@@ -129,11 +129,6 @@ static void handle_sigusr1(int sock, short flags, void *arg)
 	} else {
 		log_info("got SIGUSR1, but already paused/suspended");
 	}
-	if(multithread_mode){
-		FOR_EACH_THREAD(thread_id){
-			signal_threads(&(threads[thread_id].worker_signal_events),threads[thread_id].worker_signal_events.pipe_sigusr1);
-		}
-	}
 }
 
 static void handle_sigusr2(int sock, short flags, void *arg)
@@ -154,11 +149,6 @@ static void handle_sigusr2(int sock, short flags, void *arg)
 		break;
 	case P_NONE:
 		log_info("got SIGUSR2, but not paused/suspended");
-	}
-	if(multithread_mode){
-		FOR_EACH_THREAD(thread_id){
-			signal_threads(&(threads[thread_id].worker_signal_events), threads[thread_id].worker_signal_events.pipe_sigusr2);
-		}
 	}
 }
 
@@ -183,6 +173,10 @@ static void notify_reloading(void)
 static void handle_sighup(int sock, short flags, void *arg)
 {
 	log_info("got SIGHUP, re-reading config");
+	if(multithread_mode){
+		log_warning("Pgbouncer doesn't support reloading configs in multithread mode");
+		return;
+	}
 	notify_reloading();
 	load_config();
 	if (!sbuf_tls_setup())
