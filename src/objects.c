@@ -1714,7 +1714,7 @@ void disconnect_server(PgSocket *server, bool send_term, const char *reason, ...
 	}
 
 	if (server->dns_token) {
-		adns_cancel(adns, server->dns_token);
+		MULTITHREAD_DNS_VISIT(multithread_mode, &adns_lock, adns_cancel(adns, server->dns_token));
 		server->dns_token = NULL;
 	}
 
@@ -2057,7 +2057,13 @@ static void dns_connect(struct PgSocket *server)
 		struct DNSToken *tk;
 		slog_noise(server, "dns socket: %s", host);
 		/* launch dns lookup */
+		if(multithread_mode){
+			spin_lock_acquire(&adns_lock);
+		}
 		tk = adns_resolve(adns, host, dns_callback, server);
+		if(multithread_mode){
+			spin_lock_release(&adns_lock);
+		}
 		if (tk)
 			server->dns_token = tk;
 		goto cleanup;

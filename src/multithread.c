@@ -14,7 +14,7 @@ pthread_key_t event_base_key;
 pthread_key_t thread_pointer;
 Thread *threads;
 
-void signal_threads(WorkdersignalEvents* worker_signal_events, int signal_pipe[2]){
+static void signal_threads(WorkdersignalEvents* worker_signal_events, int signal_pipe[2]){
 	if(!multithread_mode){
 		return;
 	}
@@ -87,7 +87,7 @@ static void handle_sigint(evutil_socket_t sock, short flags, void *arg)
 	char buf[1];
 	read(threads[this_thread->thread_id].worker_signal_events.pipe_sigint[0], buf, sizeof(buf));
 	if (this_thread->cf_shutdown) {
-		log_info("[Thread %ld] got SIGINT while shutting down, fast exit", this_thread->thread_id);
+		log_info("[Thread %d] got SIGINT while shutting down, fast exit", this_thread->thread_id);
 		/* pidfile cleanup happens via atexit() */
 		exit(0);
 	}

@@ -1008,7 +1008,18 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 		}
 	}
 
-	adns_zone_cache_maint(adns);
+	if(!multithread_mode)
+		adns_zone_cache_maint(adns);
+}
+
+static void multithread_main_thread_full_maint(evutil_socket_t sock, short flags, void *arg){
+	MULTITHREAD_DNS_VISIT(multithread_mode, &adns_lock, adns_zone_cache_maint(adns));
+}
+
+void main_thread_janitor_setup(void){
+	event_assign(&full_maint_ev, pgb_event_base, -1, EV_PERSIST, multithread_main_thread_full_maint, NULL);
+			if (event_add(&full_maint_ev, &full_maint_period) < 0)
+				log_warning("event_add failed: %s", strerror(errno));
 }
 
 /* first-time initialization */

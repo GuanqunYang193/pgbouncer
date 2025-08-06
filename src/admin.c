@@ -817,7 +817,7 @@ static bool admin_show_lists(PgSocket *admin, const char *arg)
 	SENDLIST("free_servers", total_free_servers);
 	SENDLIST("used_servers", total_used_servers);
 	{
-		adns_info(adns, &names, &zones, &qry, &pend);
+		MULTITHREAD_DNS_VISIT(multithread_mode, &adns_lock, adns_info(adns, &names, &zones, &qry, &pend));
 		SENDLIST("dns_names", names);
 		SENDLIST("dns_zones", zones);
 		SENDLIST("dns_queries", qry);
@@ -1521,7 +1521,7 @@ static bool admin_show_dns_hosts(PgSocket *admin, const char *arg)
 		return true;
 	}
 	pktbuf_write_RowDescription(buf, "sqs", "hostname", "ttl", "addrs");
-	adns_walk_names(adns, dns_name_cb, buf);
+	MULTITHREAD_DNS_VISIT(multithread_mode, &adns_lock, adns_walk_names(adns, dns_name_cb, buf));
 	admin_flush(admin, buf, "SHOW");
 	return true;
 }
@@ -1544,7 +1544,7 @@ static bool admin_show_dns_zones(PgSocket *admin, const char *arg)
 		return true;
 	}
 	pktbuf_write_RowDescription(buf, "sqi", "zonename", "serial", "count");
-	adns_walk_zones(adns, dns_zone_cb, buf);
+	MULTITHREAD_DNS_VISIT(multithread_mode, &adns_lock, adns_walk_zones(adns, dns_zone_cb, buf));
 	admin_flush(admin, buf, "SHOW");
 	return true;
 }

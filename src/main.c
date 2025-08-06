@@ -71,6 +71,7 @@ struct event_base *pgb_event_base;
 
 /* async dns handler */
 struct DNSContext *adns;
+SpinLock adns_lock;
 
 struct HBA *parsed_hba;
 struct Ident *parsed_ident;
@@ -765,8 +766,9 @@ static void main_loop_once(void)
 		reuse_just_freed_objects();
 		rescue_timers();
 		per_loop_pooler_maint();
-		if (adns)
-			adns_per_loop(adns);
+	}
+	if (adns){
+		MULTITHREAD_DNS_VISIT(multithread_mode, &adns_lock, adns_per_loop(adns));
 	}
 }
 
@@ -807,6 +809,9 @@ static void dns_setup(void)
 	adns = adns_create_context();
 	if (!adns)
 		die("dns setup failed");
+	if(multithread_mode){
+		spin_lock_init(&adns_lock);
+	}
 }
 
 static void xfree(char **ptr_p)
@@ -1042,6 +1047,8 @@ int main(int argc, char *argv[])
 	if(!multithread_mode){
 		janitor_setup();
 		stats_setup();
+	}else{
+		main_thread_janitor_setup();
 	}
 	pam_init();
 	if (did_takeover) {

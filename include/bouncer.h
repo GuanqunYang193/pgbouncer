@@ -868,6 +868,7 @@ extern const struct CfLookup load_balance_hosts_map[];
 extern usec_t g_suspend_start;
 
 extern struct DNSContext *adns;
+extern SpinLock adns_lock;
 extern struct HBA *parsed_hba;
 
 static inline PgSocket * _MUSTCHECK pop_socket(struct StatList *slist)
