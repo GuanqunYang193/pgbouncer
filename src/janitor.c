@@ -171,7 +171,7 @@ static void launch_recheck(PgPool *pool)
 	if (q == NULL || q[0] == 0) {
 		need_check = false;
 	} else if (cf_server_check_delay > 0) {
-		usec_t now = get_cached_time();
+		usec_t now = get_multithread_time();
 		if (now - server->request_time < cf_server_check_delay)
 			need_check = false;
 	}
@@ -384,7 +384,7 @@ void per_loop_maint(void)
 	bool force_suspend = false;
 	
 	if (cf_pause_mode == P_SUSPEND && cf_suspend_timeout > 0) {
-		usec_t stime = get_cached_time() - g_suspend_start;
+		usec_t stime = get_multithread_time() - g_suspend_start;
 		if (stime >= cf_suspend_timeout)
 			force_suspend = true;
 	}
@@ -459,7 +459,7 @@ void per_loop_maint(void)
 static void pool_client_maint(PgPool *pool)
 {
 	struct List *item, *tmp;
-	usec_t now = get_cached_time();
+	usec_t now = get_multithread_time();
 	PgSocket *client;
 	PgGlobalUser *user;
 	usec_t age;
@@ -544,7 +544,7 @@ static void pool_client_maint(PgPool *pool)
 static void peer_pool_client_maint(PgPool *pool)
 {
 	struct List *item, *tmp;
-	usec_t now = get_cached_time();
+	usec_t now = get_multithread_time();
 	PgSocket *client;
 	usec_t age;
 
@@ -562,7 +562,7 @@ static void peer_pool_client_maint(PgPool *pool)
 
 static void check_unused_servers(PgPool *pool, struct StatList *slist, bool idle_test)
 {
-	usec_t now = get_cached_time();
+	usec_t now = get_multithread_time();
 	usec_t server_lifetime = pool_server_lifetime(pool);
 
 	struct List *item, *tmp;
@@ -639,7 +639,7 @@ static void check_pool_size(PgPool *pool)
 static void pool_server_maint(PgPool *pool)
 {
 	struct List *item, *tmp;
-	usec_t now = get_cached_time();
+	usec_t now = get_multithread_time();
 	PgSocket *server;
 
 	/* find and disconnect idle servers */
@@ -735,7 +735,7 @@ static void pool_server_maint(PgPool *pool)
 static void peer_pool_server_maint(PgPool *pool)
 {
 	struct List *item, *tmp;
-	usec_t now = get_cached_time();
+	usec_t now = get_multithread_time();
 	PgSocket *server;
 
 	/*
@@ -768,7 +768,7 @@ static void cleanup_client_logins(void)
 	PgSocket *client;
 	usec_t age;
 	struct StatList* login_client_list_ptr;
-	usec_t now = get_cached_time();
+	usec_t now = get_multithread_time();
 
 	if (cf_client_login_timeout <= 0)
 		return;
@@ -799,7 +799,7 @@ static void cleanup_inactive_autodatabases(void)
 {
 	PgDatabase *db;
 	struct List *item, *tmp;
-	usec_t now = get_cached_time();
+	usec_t now = get_multithread_time();
 	struct StatList* autodatabase_idle_list_ptr_;
 	int thread_id = get_current_thread_id(multithread_mode);
 
@@ -855,7 +855,7 @@ static void move_inactive_to_idle_list_cb(struct List *item, void *ctx){
 	if (db->db_auto && db->inactive_time == 0) {
 		if (db->active_stamp == data->seq)
 			return;
-		db->inactive_time = get_cached_time();
+		db->inactive_time = get_multithread_time();
 		statlist_remove(data->database_list_ptr, &db->head);
 		statlist_append(data->autodatabase_idle_list_ptr, &db->head);
 	}
@@ -962,7 +962,7 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 			if (db->db_auto && db->inactive_time == 0) {
 				if (db->active_stamp == *seq_ptr)
 					continue;
-				db->inactive_time = get_cached_time();
+				db->inactive_time = get_multithread_time();
 				statlist_remove((struct StatList*)database_list_ptr, &db->head);
 				statlist_append(autodatabase_idle_list_ptr, &db->head);
 			}

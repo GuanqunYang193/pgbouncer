@@ -591,7 +591,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 				if (ready || idle_tx) {
 					if (client->query_start) {
 						usec_t total;
-						total = get_cached_time() - client->query_start;
+						total = get_multithread_time() - client->query_start;
 						client->query_start = 0;
 						server->pool->stats.query_time += total;
 						slog_debug(client, "query time: %d us", (int)total);
@@ -605,7 +605,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 				if (ready) {
 					if (client->xact_start) {
 						usec_t total;
-						total = get_cached_time() - client->xact_start;
+						total = get_multithread_time() - client->xact_start;
 						client->xact_start = 0;
 						server->pool->stats.xact_time += total;
 						slog_debug(client, "transaction time: %d us", (int)total);
@@ -801,7 +801,7 @@ bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 		}
 		slog_noise(server, "read pkt='%c', len=%u", pkt_desc(&pkt), pkt.len);
 
-		server->request_time = get_cached_time();
+		server->request_time = get_multithread_time();
 		switch (server->state) {
 		case SV_LOGIN:
 			res = handle_server_startup(server, &pkt);
@@ -825,7 +825,7 @@ bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 	case SBUF_EV_CONNECT_OK:
 		slog_debug(server, "S: connect ok");
 		Assert(server->state == SV_LOGIN);
-		server->request_time = get_cached_time();
+		server->request_time = get_multithread_time();
 		res = handle_connect(server);
 		break;
 	case SBUF_EV_FLUSH:
@@ -891,7 +891,7 @@ bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 			slog_noise(server, "SSL established: %s", infobuf);
 		}
 
-		server->request_time = get_cached_time();
+		server->request_time = get_multithread_time();
 		res = send_startup_packet(server);
 		if (res)
 			sbuf_continue(&server->sbuf);

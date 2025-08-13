@@ -1365,7 +1365,7 @@ static bool handle_client_startup(PgSocket *client, PktHdr *pkt)
 	if (client->packet_cb_state.flag != CB_HANDLE_COMPLETE_PACKET) {
 		sbuf_prepare_skip(sbuf, pkt->len);
 	}
-	client->request_time = get_cached_time();
+	client->request_time = get_multithread_time();
 	return true;
 }
 
@@ -1536,7 +1536,7 @@ static bool handle_client_work(PgSocket *client, PktHdr *pkt)
 	/* update stats */
 	if (!client->query_start) {
 		client->pool->stats.query_count++;
-		client->query_start = get_cached_time();
+		client->query_start = get_multithread_time();
 	}
 
 	/* remember timestamp of the first query in a transaction */
@@ -1710,7 +1710,7 @@ bool client_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 			return false;
 		}
 
-		client->request_time = get_cached_time();
+		client->request_time = get_multithread_time();
 		if (expect_startup_packet(client)) {
 			res = handle_client_startup(client, &pkt);
 		} else {

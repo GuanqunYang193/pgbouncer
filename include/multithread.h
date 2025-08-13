@@ -2,11 +2,11 @@
 #include <usual/statlist_ts.h>
 #include <usual/aatree.h>
 #include <usual/spinlock.h>
+#include "bouncer.h"
 
 #include <pthread.h>
 #include <event2/event.h>
 #include <event2/event_struct.h>
-
 
 #define FOR_EACH_THREAD(id)         \
 	for (int id = 0;                \
@@ -124,6 +124,10 @@ typedef struct Thread {
     int cf_shutdown;
 
     unsigned int seq;
+
+    PgStats cur_stat;
+    SpinLock cur_stat_lock;
+    usec_t multithread_time_cache;
 } Thread;
 
 typedef struct ClientRequest {
@@ -150,3 +154,8 @@ void unlock_and_resume_thread(int thread_id);
 
 void set_thread_id(int thread_id);
 int get_current_thread_id(const bool multithread_mode);
+
+usec_t get_multithread_time();
+usec_t get_multithread_time_with_id(int thread_id);
+
+void multithread_reset_time_cache(void);

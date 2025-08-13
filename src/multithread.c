@@ -338,7 +338,7 @@ void* worker_func(void* arg)
     thread_pooler_setup();
 	worker_signal_setup(base, this_thread->thread_id);
 	janitor_setup();
-	stats_setup();
+	multithread_stats_setup();
 
     while(this_thread->cf_shutdown != SHUTDOWN_IMMEDIATE){
 		if(this_thread->thread_metadata.thread_status == THREAD_REQUEST_PAUSE){
@@ -352,7 +352,7 @@ void* worker_func(void* arg)
 		}
 		// log_info("thread [%ld]",this_thread->thread_id);
 
-        reset_time_cache();
+        multithread_reset_time_cache();
         err = event_base_loop(base, EVLOOP_ONCE);
         if (err < 0) {
             if (errno != EINTR)
@@ -490,3 +490,31 @@ inline int get_current_thread_id(const bool multithread_mode){
 	this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	return this_thread->thread_id;      
 }
+
+usec_t get_multithread_time(){
+	if(!multithread_mode){
+		return get_cached_time();
+	}
+	int thread_id = get_current_thread_id(multithread_mode);
+	return multithread_get_cached_time(&threads[thread_id].multithread_time_cache);
+}
+
+usec_t get_multithread_time_with_id(int thread_id){
+	if(!multithread_mode || thread_id < 0){
+		return get_cached_time();
+	}
+	return multithread_get_cached_time(&threads[thread_id].multithread_time_cache);
+}
+
+void multithread_reset_time_cache(void)
+{
+	if(!multithread_mode)
+		return;
+	int thread_id;
+	thread_id = get_current_thread_id(multithread_mode);
+	if (thread_id < 0) {
+		return;
+	}
+	threads[thread_id].multithread_time_cache = 0;
+}
+

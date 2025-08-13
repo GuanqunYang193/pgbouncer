@@ -415,7 +415,7 @@ void change_client_state(PgSocket *client, SocketState newstate)
 		break;
 	case CL_WAITING:
 	case CL_WAITING_LOGIN:
-		client->wait_start = get_cached_time();
+		client->wait_start = get_multithread_time();
 		statlist_append(&pool->waiting_client_list, &client->head);
 		break;
 	case CL_ACTIVE:
@@ -1120,7 +1120,7 @@ void activate_client(PgSocket *client)
 	Assert(client->wait_start > 0);
 
 	/* account for time client spent waiting for server */
-	client->pool->stats.wait_time += (get_cached_time() - client->wait_start);
+	client->pool->stats.wait_time += (get_multithread_time() - client->wait_start);
 
 	slog_debug(client, "activate_client");
 	change_client_state(client, CL_ACTIVE);
@@ -1472,7 +1472,7 @@ bool life_over(PgSocket *server)
 {
 	PgPool *pool = server->pool;
 	usec_t lifetime_kill_gap = 0;
-	usec_t now = get_cached_time();
+	usec_t now = get_multithread_time();
 	usec_t age = now - server->connect_time;
 	usec_t last_kill = now - pool->last_lifetime_disconnect;
 	usec_t server_lifetime = pool_server_lifetime(pool);
@@ -1552,7 +1552,7 @@ bool release_server(PgSocket *server)
 	/* enforce lifetime immediately on release */
 	if (server->state != SV_LOGIN && life_over(server)) {
 		disconnect_server(server, true, "server lifetime over");
-		pool->last_lifetime_disconnect = get_cached_time();
+		pool->last_lifetime_disconnect = get_multithread_time();
 		return false;
 	}
 
@@ -1637,7 +1637,7 @@ static void unlink_server(PgSocket *server, const char *reason)
  */
 void disconnect_server(PgSocket *server, bool send_term, const char *reason, ...)
 {
-	usec_t now = get_cached_time();
+	usec_t now = get_multithread_time();
 	char buf[128];
 	va_list ap;
 	struct List *cancel_item, *tmp;
@@ -1764,7 +1764,7 @@ void disconnect_client(PgSocket *client, bool notify, const char *reason, ...)
  */
 void disconnect_client_sqlstate(PgSocket *client, bool notify, const char *sqlstate, const char *reason)
 {
-	usec_t now = get_cached_time();
+	usec_t now = get_multithread_time();
 
 	if (client->db && client->contributes_db_client_count)
 		client->db->client_connection_count--;
@@ -2204,6 +2204,7 @@ void launch_new_connection(PgPool *pool, bool evict_if_needed)
 	int max;
 	int thread_id;
 	struct Slab *server_cache_ptr = NULL;
+	thread_id = get_current_thread_id(multithread_mode);
 
 	log_debug("launch_new_connection: start");
 	/*
@@ -2222,7 +2223,7 @@ void launch_new_connection(PgPool *pool, bool evict_if_needed)
 
 	/* if server bounces, don't retry too fast */
 	if (pool->last_connect_failed) {
-		usec_t now = get_cached_time();
+		usec_t now = get_multithread_time_with_id(thread_id);
 		if (now - pool->last_connect_time < cf_server_login_retry) {
 			log_debug("launch_new_connection: last failed, not launching new connection yet, still waiting %" PRIu64 " s",
 				  (cf_server_login_retry - (now - pool->last_connect_time)) / USEC);
@@ -2254,7 +2255,6 @@ void launch_new_connection(PgPool *pool, bool evict_if_needed)
 	 * once (see top of this function).
 	 */
 	
-	thread_id = get_current_thread_id(multithread_mode);
 	server_cache_ptr = GET_MULTITHREAD_CACHE_PTR(server_cache, thread_id);
 
 	if (!statlist_empty(&pool->waiting_cancel_req_list) && max < (2 * pool_pool_size(pool))) {
@@ -2268,7 +2268,7 @@ void launch_new_connection(PgPool *pool, bool evict_if_needed)
 			/* should we use reserve pool? */
 			PgSocket *c = first_socket(&pool->waiting_client_list);
 			if (cf_res_pool_timeout && pool_res_pool_size(pool)) {
-				usec_t now = get_cached_time();
+				usec_t now = get_multithread_time();
 				if (c && (now - c->request_time) >= cf_res_pool_timeout) {
 					if (max < pool_pool_size(pool) + pool_res_pool_size(pool)) {
 						slog_warning(c, "taking connection from reserve_pool");
@@ -2333,9 +2333,9 @@ force_new:
 	/* initialize it */
 	server->pool = pool;
 	server->login_user_credentials = server->pool->user_credentials;
-	server->connect_time = get_cached_time();
+	server->connect_time = get_multithread_time_with_id(thread_id);
 	statlist_init(&server->canceling_clients, "canceling_clients");
-	pool->last_connect_time = get_cached_time();
+	pool->last_connect_time = get_multithread_time_with_id(thread_id);
 	change_server_state(server, SV_LOGIN);
 	pool->db->connection_count++;
 	if (pool->user_credentials)
@@ -2360,7 +2360,7 @@ PgSocket *accept_client(int sock, bool is_unix)
 		return NULL;
 	}
 
-	client->connect_time = client->request_time = get_cached_time();
+	client->connect_time = client->request_time = get_multithread_time_with_id(thread_id);
 	client->query_start = 0;
 
 	/* FIXME: take local and remote address from pool_accept() */
@@ -2806,7 +2806,7 @@ bool use_server_socket(int fd, PgAddr *addr,
 	server->suspended = true;
 	server->pool = pool;
 	server->login_user_credentials = credentials;
-	server->connect_time = server->request_time = get_cached_time();
+	server->connect_time = server->request_time = get_multithread_time_with_id(thread_id);
 	server->query_start = 0;
 	statlist_init(&server->canceling_clients, "canceling_clients");
 

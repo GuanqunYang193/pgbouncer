@@ -749,10 +749,7 @@ static void main_loop_once(void)
 {
 	int err;
 
-	// FIXME understand why need to reset time cachea
-	if(!multithread_mode){
-		reset_time_cache();
-	}
+	reset_time_cache();
 
 	err = event_base_loop(pgb_event_base, EVLOOP_ONCE);
 	if (err < 0) {
@@ -1044,9 +1041,10 @@ int main(int argc, char *argv[])
 		die("event_base_new() failed");
     dns_setup();
 	signal_setup(pgb_event_base, &signal_event);
+	stats_setup();
+
 	if(!multithread_mode){
 		janitor_setup();
-		stats_setup();
 	}else{
 		main_thread_janitor_setup();
 	}
