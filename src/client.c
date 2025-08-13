@@ -21,6 +21,7 @@
  */
 
 #include "bouncer.h"
+#include "multithread.h"
 #include "pam.h"
 #include "scram.h"
 #include "common/builtins.h"
@@ -54,7 +55,8 @@ PgDatabase *prepare_auth_database(PgSocket *client)
 	if (!auth_dbname) {
 		auth_db = client->db;
 	} else {
-		auth_db = find_or_register_database(client, auth_dbname);
+		int thread_id = get_current_thread_id(multithread_mode);
+		auth_db = find_or_register_database(client, auth_dbname, thread_id);
 	}
 
 	if (!auth_db) {
@@ -177,13 +179,14 @@ static void start_auth_query(PgSocket *client, const char *username)
 {
 	int res;
 	PktBuf *buf;
+	int thread_id = get_current_thread_id(multithread_mode);
 	const char *auth_query = client->db->auth_query ? client->db->auth_query : cf_auth_query;
 
 	/* have to fetch user info from db */
 	PgDatabase *auth_db = prepare_auth_database(client);
 	if (!auth_db)
 		return;
-	client->pool = get_pool(auth_db, client->db->auth_user_credentials);
+	client->pool = get_pool(auth_db, client->db->auth_user_credentials, thread_id);
 	if (!client->pool) {
 		disconnect_client(client, true, "no memory for authentication pool");
 		return;
@@ -329,6 +332,7 @@ static bool finish_set_pool(PgSocket *client, bool takeover)
 	bool ok = false;
 	int auth;
 	struct HBARule *rule = NULL;
+	int thread_id = get_current_thread_id(multithread_mode);
 
 	if (!client->login_user_credentials->mock_auth && !client->db->fake) {
 		PgCredentials *pool_user_credentials;
@@ -338,7 +342,7 @@ static bool finish_set_pool(PgSocket *client, bool takeover)
 		else
 			pool_user_credentials = client->login_user_credentials;
 
-		client->pool = get_pool(client->db, pool_user_credentials);
+		client->pool = get_pool(client->db, pool_user_credentials, thread_id);
 		if (!client->pool) {
 			disconnect_client(client, true, "no memory for pool");
 			return false;
@@ -349,15 +353,29 @@ static bool finish_set_pool(PgSocket *client, bool takeover)
 		if (client->sbuf.tls) {
 			char infobuf[96] = "";
 			tls_get_connection_info(client->sbuf.tls, infobuf, sizeof infobuf);
-			slog_info(client, "login attempt: db=%s user=%s tls=%s replication=%s",
-				  client->db->name,
-				  client->login_user_credentials->name,
-				  infobuf,
-				  replication_type_parameters[client->replication]);
+			if(multithread_mode){
+				slog_info(client, "[Thread %d] login attempt: db=%s user=%s tls=%s replication=%s",
+					get_current_thread_id(multithread_mode),
+					client->db->name,
+					client->login_user_credentials->name,
+					infobuf,
+					replication_type_parameters[client->replication]);
+			}else{
+				slog_info(client, "login attempt: db=%s user=%s tls=%s replication=%s",
+					client->db->name,
+					client->login_user_credentials->name,
+					infobuf,
+					replication_type_parameters[client->replication]);
+			}
 		} else {
-			slog_info(client, "login attempt: db=%s user=%s tls=no replication=%s",
-				  client->db->name, client->login_user_credentials->name,
+			if(multithread_mode){
+				slog_info(client, "[Thread %d] login attempt: db=%s user=%s tls=no replication=%s",
+				  get_current_thread_id(multithread_mode), client->db->name, client->login_user_credentials->name,
 				  replication_type_parameters[client->replication]);
+			}else{
+				slog_info(client, "login attempt: db=%s user=%s tls=no replication=%s", client->db->name, client->login_user_credentials->name,
+				  replication_type_parameters[client->replication]);
+			}
 		}
 	}
 
@@ -526,10 +544,12 @@ static bool check_if_need_ldap_authentication(PgSocket *client, const char *dbna
 
 bool set_pool(PgSocket *client, const char *dbname, const char *username, const char *password, bool takeover)
 {
+	int thread_id;
 	Assert((password && takeover) || (!password && !takeover));
-
+	
+	thread_id = get_current_thread_id(multithread_mode);
 	/* find database */
-	client->db = find_or_register_database(client, dbname);
+	client->db = find_or_register_database(client, dbname, thread_id);
 	if (!client->db) {
 		client->db = calloc(1, sizeof(*client->db));
 		client->db->fake = true;
@@ -596,7 +616,7 @@ bool set_pool(PgSocket *client, const char *dbname, const char *username, const 
 			return false;
 		}
 		/* Password will be set after successful authentication when not in takeover mode */
-		client->login_user_credentials = add_pam_credentials(username, password);
+		client->login_user_credentials = add_pam_credentials(username, password, thread_id);
 		if (!check_db_connection_count(client))
 			return false;
 		if (!client->login_user_credentials) {
@@ -608,7 +628,7 @@ bool set_pool(PgSocket *client, const char *dbname, const char *username, const 
 			return false;
 		}
 	} else {
-		client->login_user_credentials = find_global_credentials(username);
+		client->login_user_credentials = find_global_credentials(username, thread_id);
 
 		if (!check_db_connection_count(client))
 			return false;
@@ -626,7 +646,7 @@ bool set_pool(PgSocket *client, const char *dbname, const char *username, const 
 			 * see if the global auth_user is set and use that.
 			 */
 			if (!client->db->auth_user_credentials && cf_auth_user) {
-				client->db->auth_user_credentials = find_or_add_new_global_credentials(cf_auth_user, "");
+				client->db->auth_user_credentials = find_or_add_new_global_credentials(cf_auth_user, "", thread_id);
 				if (client->db->auth_user_credentials == NULL) {
 					slog_error(client, "set_pool(): failed to allocate a new global credentials");
 					disconnect_client(client, true, "bouncer resources exhaustion");
@@ -638,7 +658,7 @@ bool set_pool(PgSocket *client, const char *dbname, const char *username, const 
 					slog_debug(client, "not running auth_query because database is fake");
 				} else {
 					if (takeover) {
-						client->login_user_credentials = add_dynamic_credentials(client->db, username, password);
+						client->login_user_credentials = add_dynamic_credentials(client->db, username, password, thread_id);
 
 						if (!check_db_connection_count(client))
 							return false;
@@ -689,7 +709,7 @@ bool handle_auth_query_response(PgSocket *client, PktHdr *pkt)
 	const char *username, *password;
 	PgCredentials credentials;
 	PgSocket *server = client->link;
-
+	int thread_id = get_current_thread_id(multithread_mode);
 	switch (pkt->type) {
 	case PqMsg_RowDescription:
 		if (!mbuf_get_uint16be(&pkt->data, &columns)) {
@@ -748,7 +768,7 @@ bool handle_auth_query_response(PgSocket *client, PktHdr *pkt)
 		memcpy(credentials.passwd, password, length);
 
 		slog_debug(client, "successfully parsed auth_query response for user %s", credentials.name);
-		client->login_user_credentials = add_dynamic_credentials(client->db, credentials.name, credentials.passwd);
+		client->login_user_credentials = add_dynamic_credentials(client->db, credentials.name, credentials.passwd, thread_id);
 		if (!check_user_connection_count(client)) {
 			return false;
 		}
@@ -860,6 +880,7 @@ static bool set_startup_options(PgSocket *client, const char *options)
 {
 	char arg_buf[400];
 	struct MBuf arg;
+	int thread_id;
 	const char *position = options;
 
 	if (client->replication) {
@@ -887,6 +908,7 @@ static bool set_startup_options(PgSocket *client, const char *options)
 
 	mbuf_init_fixed_writer(&arg, arg_buf, sizeof(arg_buf));
 	slog_debug(client, "received options: %s", options);
+	thread_id = get_current_thread_id(multithread_mode);
 
 	while (*position) {
 		const char *start_position = position;
@@ -921,7 +943,7 @@ static bool set_startup_options(PgSocket *client, const char *options)
 
 		key_string = (const char *) arg.data;
 		value_string = (const char *) equals + 1;
-		if (varcache_set(&client->vars, key_string, value_string)) {
+		if (varcache_set(&client->vars, key_string, value_string, thread_id)) {
 			slog_debug(client, "got var from options: %s=%s", key_string, value_string);
 		} else if (strlist_contains(cf_ignore_startup_params, key_string) || strlist_contains(cf_ignore_startup_params, "options")) {
 			slog_debug(client, "ignoring startup parameter from options: %s=%s", key_string, value_string);
@@ -945,6 +967,7 @@ static void set_appname(PgSocket *client, const char *app_name)
 {
 	char buf[400], abuf[300];
 	const char *details;
+	int thread_id;
 
 	if (cf_application_name_add_host) {
 		/* give app a name */
@@ -958,7 +981,8 @@ static void set_appname(PgSocket *client, const char *app_name)
 	}
 	if (app_name) {
 		slog_debug(client, "using application_name: %s", app_name);
-		varcache_set(&client->vars, "application_name", app_name);
+		thread_id = get_current_thread_id(multithread_mode);
+		varcache_set(&client->vars, "application_name", app_name, thread_id);
 	}
 }
 
@@ -985,6 +1009,7 @@ static bool decide_startup_pool(PgSocket *client, PktHdr *pkt)
 	const char *username = NULL, *dbname = NULL;
 	const char *key, *val;
 	bool ok;
+	int thread_id;
 	bool appname_found = false;
 	struct MBuf unsupported_protocol_extensions;
 	int unsupported_protocol_extensions_count = 0;
@@ -1012,6 +1037,7 @@ static bool decide_startup_pool(PgSocket *client, PktHdr *pkt)
 	}
 
 	pkt->data.read_pos = original_read_pos;
+	thread_id = get_current_thread_id(multithread_mode);
 
 	while (1) {
 		ok = mbuf_get_string(&pkt->data, &key);
@@ -1040,7 +1066,7 @@ static bool decide_startup_pool(PgSocket *client, PktHdr *pkt)
 			unsupported_protocol_extensions_count++;
 			if (!mbuf_write(&unsupported_protocol_extensions, key, strlen(key) + 1))
 				return false;
-		} else if (varcache_set(&client->vars, key, val)) {
+		} else if (varcache_set(&client->vars, key, val, thread_id)) {
 			slog_debug(client, "got var: %s=%s", key, val);
 		} else if (strlist_contains(cf_ignore_startup_params, key)) {
 			slog_debug(client, "ignoring startup parameter: %s=%s", key, val);
@@ -1065,8 +1091,8 @@ static bool decide_startup_pool(PgSocket *client, PktHdr *pkt)
 
 	/* check if limit allows, don't limit admin db
 	   nb: new incoming conn will be attached to PgSocket, thus
-	   get_active_client_count() counts it */
-	if (get_active_client_count() > cf_max_client_conn) {
+	   get_total_active_client_count() counts it */
+	if (get_total_active_client_count() > cf_max_client_conn) {
 		if (strcmp(dbname, "pgbouncer") != 0) {
 			disconnect_client(client, true, "no more connections allowed (max_client_conn)");
 			return false;
@@ -1418,7 +1444,7 @@ static bool handle_client_startup(PgSocket *client, PktHdr *pkt)
 	if (client->packet_cb_state.flag != CB_HANDLE_COMPLETE_PACKET) {
 		sbuf_prepare_skip(sbuf, pkt->len);
 	}
-	client->request_time = get_cached_time();
+	client->request_time = get_multithread_time();
 	return true;
 }
 
@@ -1589,7 +1615,7 @@ static bool handle_client_work(PgSocket *client, PktHdr *pkt)
 	/* update stats */
 	if (!client->query_start) {
 		client->pool->stats.query_count++;
-		client->query_start = get_cached_time();
+		client->query_start = get_multithread_time();
 	}
 
 	/* remember timestamp of the first query in a transaction */
@@ -1763,7 +1789,7 @@ bool client_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 			return false;
 		}
 
-		client->request_time = get_cached_time();
+		client->request_time = get_multithread_time();
 		if (expect_startup_packet(client)) {
 			res = handle_client_startup(client, &pkt);
 		} else {

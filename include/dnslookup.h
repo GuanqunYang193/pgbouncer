@@ -16,6 +16,19 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <usual/spinlock.h>
+
+#define MULTITHREAD_DNS_VISIT(multithread_mode, lock, func) 		    \
+	do { 											                    \
+		if (multithread_mode) { 					                    \
+			spin_lock_acquire(lock); 			                        \
+			func; 									                    \
+			spin_lock_release(lock); 			                        \
+		} else { 									                    \
+			func; 									                    \
+		}                                                               \
+	} while (0)
+
 struct DNSContext;
 struct DNSToken;
 struct addrinfo;
