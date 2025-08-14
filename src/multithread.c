@@ -496,14 +496,14 @@ usec_t get_multithread_time(){
 		return get_cached_time();
 	}
 	int thread_id = get_current_thread_id(multithread_mode);
-	return multithread_get_cached_time(&threads[thread_id].multithread_time_cache);
+	return get_cached_time_from_ptr(&threads[thread_id].multithread_time_cache);
 }
 
 usec_t get_multithread_time_with_id(int thread_id){
 	if(!multithread_mode || thread_id < 0){
 		return get_cached_time();
 	}
-	return multithread_get_cached_time(&threads[thread_id].multithread_time_cache);
+	return get_cached_time_from_ptr(&threads[thread_id].multithread_time_cache);
 }
 
 void multithread_reset_time_cache(void)
