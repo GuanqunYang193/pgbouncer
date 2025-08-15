@@ -401,6 +401,8 @@ static void multithread_stats(evutil_socket_t s, short flags, void *arg){
 	PgPool *pool;
 	PgStats old_total, cur_total;
 	thread_id = get_current_thread_id(multithread_mode);
+	reset_stats(&old_total);
+	reset_stats(&cur_total);
 
 	struct {
 		PgStats* old_total;
@@ -408,14 +410,14 @@ static void multithread_stats(evutil_socket_t s, short flags, void *arg){
 	} data = { &old_total, &cur_total};
 	thread_safe_statlist_iterate(&(threads[thread_id].pool_list), multithread_stats_callback, &data);
 	// TODO: macro?
+
 	stat_diff(&cur_total, &old_total);
 	spin_lock_acquire(&(threads[thread_id].cur_stat_lock));
-	threads[thread_id].cur_stat = cur_total;
+	stat_add(&(threads[thread_id].cur_stat),&cur_total);
 	spin_lock_release(&(threads[thread_id].cur_stat_lock));
 }
 
 static void multithread_collect_stats(evutil_socket_t s, short flags, void *arg){
-	log_info("multithread_collect_stats");
 	PgStats old_total, cur_total;
 	PgStats avg;
 
@@ -425,13 +427,13 @@ static void multithread_collect_stats(evutil_socket_t s, short flags, void *arg)
 	FOR_EACH_THREAD(thread_id){
 		spin_lock_acquire(&(threads[thread_id].cur_stat_lock));
 		stat_add(&cur_total, &(threads[thread_id].cur_stat));
+		reset_stats(&(threads[thread_id].cur_stat));
 		spin_lock_release(&(threads[thread_id].cur_stat_lock));
 	}
 
 	old_stamp = new_stamp;
 	// use global time rather than per-thread time
 	new_stamp = get_cached_time();
-
 	calc_average(&avg, &cur_total, &old_total, get_cached_time());
 
 	if (cf_log_stats) {
