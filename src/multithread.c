@@ -35,7 +35,7 @@ void handle_sigterm_main(evutil_socket_t sock, short flags, void *arg)
 	if (cf_pause_mode == P_SUSPEND)
 		die("suspend was in progress, going down immediately");
 	cf_shutdown = SHUTDOWN_IMMEDIATE;
-	cleanup_sockets();
+	cleanup_tcp_sockets();
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
 			signal_threads(&(threads[thread_id].worker_signal_events),threads[thread_id].worker_signal_events.pipe_sigterm);
@@ -72,7 +72,7 @@ static void handle_sigint_main(evutil_socket_t sock, short flags, void *arg)
 		die("suspend was in progress, going down immediately");
 	cf_pause_mode = P_PAUSE;
 	cf_shutdown = SHUTDOWN_IMMEDIATE;
-	cleanup_sockets();
+	cleanup_tcp_sockets();
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
 			signal_threads(&(threads[thread_id].worker_signal_events),threads[thread_id].worker_signal_events.pipe_sigint);
@@ -496,14 +496,14 @@ usec_t get_multithread_time(){
 		return get_cached_time();
 	}
 	int thread_id = get_current_thread_id(multithread_mode);
-	return multithread_get_cached_time(&threads[thread_id].multithread_time_cache);
+	return get_cached_time_from_ptr(&threads[thread_id].multithread_time_cache);
 }
 
 usec_t get_multithread_time_with_id(int thread_id){
 	if(!multithread_mode || thread_id < 0){
 		return get_cached_time();
 	}
-	return multithread_get_cached_time(&threads[thread_id].multithread_time_cache);
+	return get_cached_time_from_ptr(&threads[thread_id].multithread_time_cache);
 }
 
 void multithread_reset_time_cache(void)

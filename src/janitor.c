@@ -1012,7 +1012,6 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 			struct event_base * base;
 			log_info("[Thread %d] server connections dropped, exiting", this_thread->thread_id);
 			this_thread->cf_shutdown = SHUTDOWN_IMMEDIATE;
-			cleanup_unix_sockets();
 			base = (struct event_base *)pthread_getspecific(event_base_key);
 			event_base_loopbreak(base);
 			return;
@@ -1022,7 +1021,6 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 			struct event_base * base;
 			log_info("client connections dropped, exiting");
 			this_thread->cf_shutdown = SHUTDOWN_IMMEDIATE;
-			cleanup_unix_sockets();
 			base = (struct event_base *)pthread_getspecific(event_base_key);
 			event_base_loopbreak(base);
 			return;
@@ -1036,11 +1034,13 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 			return;
 		}
 
-	if (cf_shutdown == SHUTDOWN_WAIT_FOR_CLIENTS && get_active_client_count() == 0) {
-		log_info("client connections dropped, exiting");
-		cf_shutdown = SHUTDOWN_IMMEDIATE;
-		event_base_loopbreak(pgb_event_base);
-		return;
+		if (cf_shutdown == SHUTDOWN_WAIT_FOR_CLIENTS && get_active_client_count(-1) == 0) {
+			log_info("client connections dropped, exiting");
+			cf_shutdown = SHUTDOWN_IMMEDIATE;
+			cleanup_unix_sockets();
+			event_base_loopbreak(pgb_event_base);
+			return;
+		}
 	}
 
 	if(!multithread_mode)
@@ -1048,7 +1048,7 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 }
 
 static void multithread_main_thread_full_maint(evutil_socket_t sock, short flags, void *arg){
-	MULTITHREAD_DNS_VISIT(multithread_mode, &adns_lock, adns_zone_cache_maint(adns));
+	MULTITHREAD_VISIT(multithread_mode, &adns_lock, adns_zone_cache_maint(adns));
 }
 
 void main_thread_janitor_setup(void){
@@ -1257,11 +1257,30 @@ void config_postprocess(void)
 				}
 			}
 
-	statlist_for_each_safe(item, &peer_list, tmp) {
-		db = container_of(item, PgDatabase, head);
-		if (db->db_dead) {
-			kill_peer(db);
-			continue;
+			statlist_for_each_safe(item, &peer_list, tmp) {
+				db = container_of(item, PgDatabase, head);
+				if (db->db_dead) {
+					kill_peer(db, thread_id);
+					continue;
+				}
+			}
+			// unlock_and_resume_thread(thread_id);
+		}
+	}else{
+		statlist_for_each_safe(item, &database_list, tmp) {
+			db = container_of(item, PgDatabase, head);
+			if (db->db_dead) {
+				kill_database(db, -1);
+				continue;
+			}
+		}
+
+		statlist_for_each_safe(item, &peer_list, tmp) {
+			db = container_of(item, PgDatabase, head);
+			if (db->db_dead) {
+				kill_peer(db, -1);
+				continue;
+			}
 		}
 	}
 }

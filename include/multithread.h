@@ -2,6 +2,7 @@
 #include <usual/statlist_ts.h>
 #include <usual/aatree.h>
 #include <usual/spinlock.h>
+#include <usual/time.h>
 #include "bouncer.h"
 
 #include <pthread.h>
@@ -19,6 +20,18 @@
 
 #define GET_MULTITHREAD_CACHE_PTR(name, thread_id) \
 	(multithread_mode ? (threads[thread_id].name) : (name))
+
+
+#define MULTITHREAD_VISIT(multithread_mode, lock, func) 		        \
+	do { 											                    \
+		if (multithread_mode) { 					                    \
+			spin_lock_acquire(lock); 			                        \
+			func; 									                    \
+			spin_lock_release(lock); 			                        \
+		} else { 									                    \
+			func; 									                    \
+		}                                                               \
+	} while (0)
 
 
 typedef struct SignalEvent{
@@ -155,7 +168,7 @@ void unlock_and_resume_thread(int thread_id);
 void set_thread_id(int thread_id);
 int get_current_thread_id(const bool multithread_mode);
 
-usec_t get_multithread_time();
+usec_t get_multithread_time(void);
 usec_t get_multithread_time_with_id(int thread_id);
 
 void multithread_reset_time_cache(void);

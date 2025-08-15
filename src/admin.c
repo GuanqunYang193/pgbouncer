@@ -817,7 +817,7 @@ static bool admin_show_lists(PgSocket *admin, const char *arg)
 	SENDLIST("free_servers", total_free_servers);
 	SENDLIST("used_servers", total_used_servers);
 	{
-		MULTITHREAD_DNS_VISIT(multithread_mode, &adns_lock, adns_info(adns, &names, &zones, &qry, &pend));
+		MULTITHREAD_VISIT(multithread_mode, &adns_lock, adns_info(adns, &names, &zones, &qry, &pend));
 		SENDLIST("dns_names", names);
 		SENDLIST("dns_zones", zones);
 		SENDLIST("dns_queries", qry);
@@ -1522,7 +1522,7 @@ static bool admin_show_dns_hosts(PgSocket *admin, const char *arg)
 		return true;
 	}
 	pktbuf_write_RowDescription(buf, "sqs", "hostname", "ttl", "addrs");
-	MULTITHREAD_DNS_VISIT(multithread_mode, &adns_lock, adns_walk_names(adns, dns_name_cb, buf));
+	MULTITHREAD_VISIT(multithread_mode, &adns_lock, adns_walk_names(adns, dns_name_cb, buf));
 	admin_flush(admin, buf, "SHOW");
 	return true;
 }
@@ -1545,7 +1545,7 @@ static bool admin_show_dns_zones(PgSocket *admin, const char *arg)
 		return true;
 	}
 	pktbuf_write_RowDescription(buf, "sqi", "zonename", "serial", "count");
-	MULTITHREAD_DNS_VISIT(multithread_mode, &adns_lock, adns_walk_zones(adns, dns_zone_cb, buf));
+	MULTITHREAD_VISIT(multithread_mode, &adns_lock, adns_walk_zones(adns, dns_zone_cb, buf));
 	admin_flush(admin, buf, "SHOW");
 	return true;
 }
@@ -2027,51 +2027,57 @@ static bool admin_cmd_kill(PgSocket *admin, const char *arg)
 	if (!arg[0]) {
 		log_info("KILL command issued");
 
-		statlist_for_each_safe(item, &pool_list, tmp) {
-			pool = container_of(item, PgPool, head);
-			if (pool->db->admin)
-				continue;
-
-			pool->db->db_paused = true;
-			kill_pool(pool);
-		}
-	} else {
-		PgDatabase *db;
-
-	log_info("KILL '%s' command issued", arg);
-	if (multithread_mode) {
-		bool found = false;
 		FOR_EACH_THREAD(thread_id){
 			lock_and_pause_thread(thread_id);
-			db = find_or_register_database(admin, arg, thread_id);
-			if(!db){
-				continue;
-			}
-			if (db == admin->pool->db)
-				return admin_error(admin, "cannot kill admin db: %s", arg);
-			found = true;
-			db->db_paused = true;
 			statlist_for_each_safe(item, &(threads[thread_id].pool_list.list), tmp) {
 				pool = container_of(item, PgPool, head);
-				if (pool->db->name == db->name)
-					kill_pool(pool, thread_id);
+				if (pool->db->admin)
+					continue;
+				pool->db->db_paused = true;
+				kill_pool(pool, thread_id);
 			}
 			unlock_and_resume_thread(thread_id);
 		}
-		if(!found)
-			return admin_error(admin, "cannot kill admin db: %s", arg);
-	} else {
-		db = find_or_register_database(admin, arg, -1);
-		if (db == NULL)
-			return admin_error(admin, "no such database: %s", arg);
-		if (db == admin->pool->db)
-			return admin_error(admin, "cannot kill admin db: %s", arg);
 
-		db->db_paused = true;
-		statlist_for_each_safe(item, &pool_list, tmp) {
-			pool = container_of(item, PgPool, head);
-			if (pool->db->name == db->name)
-				kill_pool(pool, -1);
+	} else {
+		PgDatabase *db;
+
+		log_info("KILL '%s' command issued", arg);
+
+		if (multithread_mode) {
+			bool found = false;
+			FOR_EACH_THREAD(thread_id){
+				lock_and_pause_thread(thread_id);
+				db = find_or_register_database(admin, arg, thread_id);
+				if(!db){
+					continue;
+				}
+				if (db == admin->pool->db)
+					return admin_error(admin, "cannot kill admin db: %s", arg);
+				found = true;
+				db->db_paused = true;
+				statlist_for_each_safe(item, &(threads[thread_id].pool_list.list), tmp) {
+					pool = container_of(item, PgPool, head);
+					if (pool->db->name == db->name)
+						kill_pool(pool, thread_id);
+				}
+				unlock_and_resume_thread(thread_id);
+			}
+			if(!found)
+				return admin_error(admin, "cannot kill admin db: %s", arg);
+		} else {
+			db = find_or_register_database(admin, arg, -1);
+			if (db == NULL)
+				return admin_error(admin, "no such database: %s", arg);
+			if (db == admin->pool->db)
+				return admin_error(admin, "cannot kill admin db: %s", arg);
+
+			db->db_paused = true;
+			statlist_for_each_safe(item, &pool_list, tmp) {
+				pool = container_of(item, PgPool, head);
+				if (pool->db->name == db->name)
+					kill_pool(pool, -1);
+			}
 		}
 	}
 

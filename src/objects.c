@@ -1717,7 +1717,7 @@ void disconnect_server(PgSocket *server, bool send_term, const char *reason, ...
 	}
 
 	if (server->dns_token) {
-		MULTITHREAD_DNS_VISIT(multithread_mode, &adns_lock, adns_cancel(adns, server->dns_token));
+		MULTITHREAD_VISIT(multithread_mode, &adns_lock, adns_cancel(adns, server->dns_token));
 		server->dns_token = NULL;
 	}
 
