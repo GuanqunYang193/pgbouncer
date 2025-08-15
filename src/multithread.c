@@ -49,7 +49,7 @@ void handle_sigterm(evutil_socket_t sock, short flags, void *arg)
 	char buf[1];
 	read(threads[this_thread->thread_id].worker_signal_events.pipe_sigterm[0], buf, sizeof(buf));
 	if (this_thread->cf_shutdown) {
-		log_info("[Thread %ld] got SIGTERM while shutting down, fast exit", this_thread->thread_id);
+		log_info("[Thread %d] got SIGTERM while shutting down, fast exit", this_thread->thread_id);
 		/* pidfile cleanup happens via atexit() */
 		exit(0);
 	}
@@ -117,7 +117,7 @@ static void handle_sigquit_worker(evutil_socket_t sock, short flags, void *arg)
 	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	char buf[1];
 	read(threads[this_thread->thread_id].worker_signal_events.pipe_sigquit[0], buf, sizeof(buf));
-	log_info("[Thread %ld] got SIGQUIT, fast exit", this_thread->thread_id);
+	log_info("[Thread %d] got SIGQUIT, fast exit", this_thread->thread_id);
 	pthread_exit(0);
 }
 
@@ -491,11 +491,12 @@ inline int get_current_thread_id(const bool multithread_mode){
 	return this_thread->thread_id;      
 }
 
-usec_t get_multithread_time(){
+usec_t get_multithread_time(void){
+	int thread_id;
 	if(!multithread_mode){
 		return get_cached_time();
 	}
-	int thread_id = get_current_thread_id(multithread_mode);
+	thread_id = get_current_thread_id(multithread_mode);
 	return get_cached_time_from_ptr(&threads[thread_id].multithread_time_cache);
 }
 
@@ -508,9 +509,9 @@ usec_t get_multithread_time_with_id(int thread_id){
 
 void multithread_reset_time_cache(void)
 {
+	int thread_id;
 	if(!multithread_mode)
 		return;
-	int thread_id;
 	thread_id = get_current_thread_id(multithread_mode);
 	if (thread_id < 0) {
 		return;

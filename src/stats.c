@@ -72,6 +72,14 @@ static void stat_add(PgStats *total, PgStats *stat)
 
 static void calc_average(PgStats *avg, PgStats *cur, PgStats *old, usec_t current_time)
 {
+	uint64_t server_assignment_count;
+	uint64_t query_count;
+	uint64_t xact_count;
+	uint64_t ps_client_parse_count;
+	uint64_t ps_server_parse_count;
+	uint64_t ps_bind_count;
+	usec_t dur;
+
 	if (old_stamp <= 0) {
 		reset_stats(avg);
 		return;
@@ -81,14 +89,6 @@ static void calc_average(PgStats *avg, PgStats *cur, PgStats *old, usec_t curren
 		reset_stats(avg);
 		return;
 	}
-	uint64_t server_assignment_count;
-	uint64_t query_count;
-	uint64_t xact_count;
-	uint64_t ps_client_parse_count;
-	uint64_t ps_server_parse_count;
-	uint64_t ps_bind_count;
-
-	usec_t dur;
 
 	dur = current_time - old_stamp;
 
@@ -379,7 +379,7 @@ bool show_stat_totals(PgSocket *client, struct StatList *pool_list)
 	return true;
 }
 
-void multithread_stats_callback(struct List *item, void * arg)
+static void multithread_stats_callback(struct List *item, void * arg)
 {
 	struct {
 		PgStats* old_total;
@@ -396,18 +396,18 @@ void multithread_stats_callback(struct List *item, void * arg)
 
 static void multithread_stats(evutil_socket_t s, short flags, void *arg){
 	int thread_id;
-	struct StatList* pool_list_ptr = NULL;
-	struct List *item;
-	PgPool *pool;
 	PgStats old_total, cur_total;
+	struct {
+		PgStats* old_total;
+		PgStats* cur_total;
+	} data;
+	
 	thread_id = get_current_thread_id(multithread_mode);
 	reset_stats(&old_total);
 	reset_stats(&cur_total);
 
-	struct {
-		PgStats* old_total;
-		PgStats* cur_total;
-	} data = { &old_total, &cur_total};
+	data.old_total = &old_total;
+	data.cur_total = &cur_total;
 	thread_safe_statlist_iterate(&(threads[thread_id].pool_list), multithread_stats_callback, &data);
 	// TODO: macro?
 
