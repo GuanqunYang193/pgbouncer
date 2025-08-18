@@ -883,13 +883,13 @@ static void move_inactive_to_idle_list_cb(struct List *item, void *ctx){
 	struct {
 		unsigned int seq;
 		struct StatList* database_list_ptr;
-		struct StatList* autodatabase_idle_list_ptr;
+		struct ThreadSafeStatList* autodatabase_idle_list_ptr;
 	} *data = ctx;
 	if (db->db_auto && db->inactive_time == 0) {
 		if (db->active_stamp == data->seq)
 			return;
 		db->inactive_time = get_multithread_time();
-		statlist_remove(data->database_list_ptr, &db->head);
+		thread_safe_statlist_remove(data->database_list_ptr, &db->head);
 		statlist_append(data->autodatabase_idle_list_ptr, &db->head);
 	}
 }
@@ -911,10 +911,9 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	unsigned int* seq_ptr = &seq;
 
 	if(multithread_mode){
-		int thread_id = get_current_thread_id(multithread_mode);
 		seq_ptr = &(threads[thread_id].seq);
 	}
-	*seq_ptr ++;
+	(*seq_ptr) ++;
 
 	/*
 	 * Avoid doing anything that may surprise other pgbouncer.
@@ -985,9 +984,9 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	if(multithread_mode){
 		struct {
 			unsigned int seq;
-			struct StatList* database_list_ptr;
+			struct ThreadSafeStatList* database_list_ptr;
 			struct StatList* autodatabase_idle_list_ptr;
-		} data = { *seq_ptr, &(((struct ThreadSafeStatList*)database_list_ptr)->list), autodatabase_idle_list_ptr };
+		} data = { *seq_ptr, database_list_ptr, autodatabase_idle_list_ptr };
 		thread_safe_statlist_iterate((struct ThreadSafeStatList*)database_list_ptr, move_inactive_to_idle_list_cb, &data);
 	} else {
 		statlist_for_each_safe(item, (struct StatList*)database_list_ptr, tmp) {
@@ -1247,6 +1246,7 @@ void config_postprocess(void)
 	PgDatabase *db;
 	
 	if(multithread_mode){
+		// TODO fix this!!
 		FOR_EACH_THREAD(thread_id){
 			// lock_and_pause_thread(thread_id);
 			statlist_for_each_safe(item, &database_list, tmp) {

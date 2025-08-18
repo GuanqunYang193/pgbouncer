@@ -107,9 +107,9 @@ static inline void thread_safe_statlist_iterate(
     void (*func)(struct List *, void *),
     void *ctx)
 {
-    struct List *item;
+    struct List *item, *tmp;
     spin_lock_acquire(&list->lock);
-    statlist_for_each(item, &list->list) {
+    statlist_for_each_safe(item, &list->list, tmp) {
         func(item, ctx);
     }
     spin_lock_release(&list->lock);
