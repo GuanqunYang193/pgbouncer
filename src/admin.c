@@ -1924,21 +1924,21 @@ static PgSocket *find_socket_in_list(unsigned long long int target_id, struct St
 	return NULL;
 }
 
-static void find_client_global_internal(PgSocket *kill_client, PgPool *pool, int target_id) {
-	if (kill_client != NULL)
-		return;
+static PgSocket *find_client_global_internal(PgPool *pool, int target_id) {
+	PgSocket *kill_client = NULL;
 	kill_client = find_socket_in_list(target_id, &pool->active_client_list);
 	if (kill_client != NULL)
-		return;
+		return kill_client;
 	kill_client = find_socket_in_list(target_id, &pool->waiting_client_list);
 	if (kill_client != NULL)
-		return;
+		return kill_client;
 	kill_client = find_socket_in_list(target_id, &pool->active_cancel_req_list);
 	if (kill_client != NULL)
-		return;
+		return kill_client;
 	kill_client = find_socket_in_list(target_id, &pool->waiting_cancel_req_list);
 	if (kill_client != NULL)
-		return;
+		return kill_client;
+	return NULL;
 }
 
 typedef struct {
@@ -1958,13 +1958,12 @@ static FindClientRes find_client_global(unsigned long long int target_id)
 			lock_and_pause_thread(thread_id);
 			statlist_for_each(item, &(threads[thread_id].pool_list.list)) {
 				pool = container_of(item, PgPool, head);
-
-				find_client_global_internal(kill_client, pool, target_id);
+				kill_client = find_client_global_internal(pool, target_id);
 				if (kill_client != NULL){
 					unlock_and_resume_thread(thread_id);
 					find_client_res.thread_id = thread_id;
 					find_client_res.client = kill_client;
-					break;
+					return find_client_res;
 				}
 			}
 			unlock_and_resume_thread(thread_id);
@@ -1972,11 +1971,11 @@ static FindClientRes find_client_global(unsigned long long int target_id)
 	} else {
 		statlist_for_each(item, &pool_list) {
 			pool = container_of(item, PgPool, head);
-
-			find_client_global_internal(kill_client, pool, target_id);
+			kill_client = find_client_global_internal(pool, target_id);
 			if (kill_client != NULL){
 				find_client_res.client = kill_client;
-				break;
+				find_client_res.thread_id = -1;
+				return find_client_res;
 			}
 		}
 	}
@@ -1998,6 +1997,12 @@ static bool admin_cmd_kill_client(PgSocket *admin, const char *arg)
 	if (kill_client.client == NULL) {
 		return admin_error(admin, "client not found");
 	}
+
+	if (!multithread_mode) {
+		disconnect_client(kill_client.client, true, "admin forced disconnect");
+		return admin_ready(admin, "KILL_CLIENT");
+	}
+	
 	thread_id = get_current_thread_id(multithread_mode);
 
 	lock_and_pause_thread(kill_client.thread_id);
