@@ -2012,72 +2012,144 @@ static bool admin_cmd_kill_client(PgSocket *admin, const char *arg)
 	return admin_ready(admin, "KILL_CLIENT");
 }
 
-/* Command: KILL */
-static bool admin_cmd_kill(PgSocket *admin, const char *arg)
+/* Helper function to kill all pools in a thread */
+static void kill_all_pools_in_thread(int thread_id)
 {
 	struct List *item, *tmp;
 	PgPool *pool;
 
+	lock_and_pause_thread(thread_id);
+	statlist_for_each_safe(item, &(threads[thread_id].pool_list.list), tmp) {
+		pool = container_of(item, PgPool, head);
+		if (pool->db->admin)
+			continue;
+		pool->db->db_paused = true;
+		kill_pool(pool, thread_id);
+	}
+	unlock_and_resume_thread(thread_id);
+}
+
+/* Helper function to kill pools for a specific database in a thread */
+static bool kill_database_pools_in_thread(int thread_id, const char *db_name, PgSocket *admin)
+{
+	struct List *item, *tmp;
+	PgPool *pool;
+	PgDatabase *db;
+	bool found = false;
+
+	lock_and_pause_thread(thread_id);
+	db = find_or_register_database(admin, db_name, thread_id);
+	if (!db) {
+		unlock_and_resume_thread(thread_id);
+		return false;
+	}
+	
+	if (db == admin->pool->db) {
+		unlock_and_resume_thread(thread_id);
+		return false;
+	}
+	
+	found = true;
+	db->db_paused = true;
+	statlist_for_each_safe(item, &(threads[thread_id].pool_list.list), tmp) {
+		pool = container_of(item, PgPool, head);
+		if (pool->db->name == db->name)
+			kill_pool(pool, thread_id);
+	}
+	unlock_and_resume_thread(thread_id);
+	return found;
+}
+
+/* Helper function to kill all pools (single-thread mode) */
+static void kill_all_pools_single_thread(void)
+{
+	struct List *item, *tmp;
+	PgPool *pool;
+
+	statlist_for_each_safe(item, &pool_list, tmp) {
+		pool = container_of(item, PgPool, head);
+		if (pool->db->admin)
+			continue;
+		pool->db->db_paused = true;
+		kill_pool(pool, -1);
+	}
+}
+
+/* Helper function to kill pools for a specific database (single-thread mode) */
+static bool kill_database_pools_single_thread(const char *db_name, PgSocket *admin)
+{
+	struct List *item, *tmp;
+	PgPool *pool;
+	PgDatabase *db;
+
+	db = find_or_register_database(admin, db_name, -1);
+	if (db == NULL)
+		return false;
+	
+	if (db == admin->pool->db)
+		return false; /* Will be handled by caller */
+	
+	db->db_paused = true;
+	statlist_for_each_safe(item, &pool_list, tmp) {
+		pool = container_of(item, PgPool, head);
+		if (pool->db->name == db->name)
+			kill_pool(pool, -1);
+	}
+	return true;
+}
+
+/* Command: KILL */
+static bool admin_cmd_kill(PgSocket *admin, const char *arg)
+{
 	if (!admin->admin_user)
 		return admin_error(admin, "admin access needed");
 
 	if (cf_pause_mode)
 		return admin_error(admin, "already suspended/paused");
 
+	/* Kill all databases */
 	if (!arg[0]) {
 		log_info("KILL command issued");
 
-		FOR_EACH_THREAD(thread_id){
-			lock_and_pause_thread(thread_id);
-			statlist_for_each_safe(item, &(threads[thread_id].pool_list.list), tmp) {
-				pool = container_of(item, PgPool, head);
-				if (pool->db->admin)
-					continue;
-				pool->db->db_paused = true;
-				kill_pool(pool, thread_id);
-			}
-			unlock_and_resume_thread(thread_id);
-		}
-
-	} else {
-		PgDatabase *db;
-
-		log_info("KILL '%s' command issued", arg);
-
 		if (multithread_mode) {
-			bool found = false;
-			FOR_EACH_THREAD(thread_id){
-				lock_and_pause_thread(thread_id);
-				db = find_or_register_database(admin, arg, thread_id);
-				if(!db){
-					continue;
-				}
-				if (db == admin->pool->db)
-					return admin_error(admin, "cannot kill admin db: %s", arg);
-				found = true;
-				db->db_paused = true;
-				statlist_for_each_safe(item, &(threads[thread_id].pool_list.list), tmp) {
-					pool = container_of(item, PgPool, head);
-					if (pool->db->name == db->name)
-						kill_pool(pool, thread_id);
-				}
-				unlock_and_resume_thread(thread_id);
+			FOR_EACH_THREAD(thread_id) {
+				kill_all_pools_in_thread(thread_id);
 			}
-			if(!found)
-				return admin_error(admin, "cannot kill admin db: %s", arg);
 		} else {
-			db = find_or_register_database(admin, arg, -1);
-			if (db == NULL)
-				return admin_error(admin, "no such database: %s", arg);
-			if (db == admin->pool->db)
-				return admin_error(admin, "cannot kill admin db: %s", arg);
+			kill_all_pools_single_thread();
+		}
+		return admin_ready(admin, "KILL");
+	}
 
-			db->db_paused = true;
-			statlist_for_each_safe(item, &pool_list, tmp) {
-				pool = container_of(item, PgPool, head);
-				if (pool->db->name == db->name)
-					kill_pool(pool, -1);
+	/* Kill specific database */
+	log_info("KILL '%s' command issued", arg);
+
+	if (multithread_mode) {
+		bool found = false;
+		FOR_EACH_THREAD(thread_id) {
+			if (kill_database_pools_in_thread(thread_id, arg, admin)) {
+				found = true;
 			}
+		}
+		
+		if (!found) {
+			/* Check if it's the admin database */
+			FOR_EACH_THREAD(thread_id) {
+				PgDatabase *db = find_or_register_database(admin, arg, thread_id);
+				if (db && db == admin->pool->db) {
+					return admin_error(admin, "cannot kill admin db: %s", arg);
+				}
+			}
+			return admin_error(admin, "no such database: %s", arg);
+		}
+	} else {
+		if (!kill_database_pools_single_thread(arg, admin)) {
+			/* Check if it's the admin database */
+			PgDatabase *db = find_or_register_database(admin, arg, -1);
+			if (db && db == admin->pool->db) {
+				return admin_error(admin, "cannot kill admin db: %s", arg);
+			}
+			return admin_error(admin, "no such database: %s", arg);
 		}
 	}
 
