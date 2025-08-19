@@ -437,7 +437,10 @@ loop:
 
 static void handle_request(evutil_socket_t fd, short event, void* arg){
 	struct ClientRequest client_request; 
-	read(fd, &client_request, sizeof(client_request));
+	if(read(fd, &client_request, sizeof(client_request))){
+		log_error("Failed to read from pipe");
+		return;
+	}
     if (client_request.fd < 0) {
         return; 
     }

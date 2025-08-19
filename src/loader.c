@@ -574,7 +574,7 @@ bool parse_user(void *base, const char *name, const char *connstr)
 			goto fail;
 		}
 	}
-
+	user = NULL;
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
 			user = find_or_add_new_global_user(name, "", thread_id);

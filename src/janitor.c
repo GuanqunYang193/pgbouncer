@@ -882,8 +882,8 @@ static void move_inactive_to_idle_list_cb(struct List *item, void *ctx){
 	PgDatabase *db = container_of(item, PgDatabase, head);
 	struct {
 		unsigned int seq;
-		struct StatList* database_list_ptr;
-		struct ThreadSafeStatList* autodatabase_idle_list_ptr;
+		struct ThreadSafeStatList* database_list_ptr;
+		struct StatList* autodatabase_idle_list_ptr;
 	} *data = ctx;
 	if (db->db_auto && db->inactive_time == 0) {
 		if (db->active_stamp == data->seq)

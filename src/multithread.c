@@ -14,11 +14,14 @@ pthread_key_t event_base_key;
 pthread_key_t thread_pointer;
 Thread *threads;
 
-static void signal_threads(WorkdersignalEvents* worker_signal_events, int signal_pipe[2]){
+static void signal_threads(int signal_pipe[2]){
 	if(!multithread_mode){
 		return;
 	}
-	write(signal_pipe[1], "x", 1); 
+	if(write(signal_pipe[1], "x", 1)){
+		log_error("Failed to write to pipe");
+		return;
+	}
 }
 
 void handle_sigterm_main(evutil_socket_t sock, short flags, void *arg)
@@ -38,7 +41,7 @@ void handle_sigterm_main(evutil_socket_t sock, short flags, void *arg)
 	cleanup_tcp_sockets();
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
-			signal_threads(&(threads[thread_id].worker_signal_events),threads[thread_id].worker_signal_events.pipe_sigterm);
+			signal_threads(threads[thread_id].worker_signal_events.pipe_sigterm);
 		}
 	}
 }
@@ -47,7 +50,9 @@ void handle_sigterm(evutil_socket_t sock, short flags, void *arg)
 {
 	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	char buf[1];
-	read(threads[this_thread->thread_id].worker_signal_events.pipe_sigterm[0], buf, sizeof(buf));
+	if(read(threads[this_thread->thread_id].worker_signal_events.pipe_sigterm[0], buf, sizeof(buf))){
+
+	}
 	if (this_thread->cf_shutdown) {
 		log_info("[Thread %d] got SIGTERM while shutting down, fast exit", this_thread->thread_id);
 		/* pidfile cleanup happens via atexit() */
@@ -75,7 +80,7 @@ static void handle_sigint_main(evutil_socket_t sock, short flags, void *arg)
 	cleanup_tcp_sockets();
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
-			signal_threads(&(threads[thread_id].worker_signal_events),threads[thread_id].worker_signal_events.pipe_sigint);
+			signal_threads(threads[thread_id].worker_signal_events.pipe_sigint);
 		}
 	}
 }
@@ -85,7 +90,10 @@ static void handle_sigint(evutil_socket_t sock, short flags, void *arg)
 {
 	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	char buf[1];
-	read(threads[this_thread->thread_id].worker_signal_events.pipe_sigint[0], buf, sizeof(buf));
+	if(read(threads[this_thread->thread_id].worker_signal_events.pipe_sigint[0], buf, sizeof(buf))){
+		log_error("[Thread %d] got SIGINT failure.", this_thread->thread_id);
+		return;
+	}
 	if (this_thread->cf_shutdown) {
 		log_info("[Thread %d] got SIGINT while shutting down, fast exit", this_thread->thread_id);
 		/* pidfile cleanup happens via atexit() */
@@ -103,7 +111,7 @@ static void handle_sigquit_main(evutil_socket_t sock, short flags, void *arg)
 	/* pidfile cleanup happens via atexit() */
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
-			signal_threads(&(threads[thread_id].worker_signal_events),threads[thread_id].worker_signal_events.pipe_sigquit);
+			signal_threads(threads[thread_id].worker_signal_events.pipe_sigquit);
 		}
 	}
 	FOR_EACH_THREAD(thread_id){
@@ -116,7 +124,10 @@ static void handle_sigquit_worker(evutil_socket_t sock, short flags, void *arg)
 {
 	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	char buf[1];
-	read(threads[this_thread->thread_id].worker_signal_events.pipe_sigquit[0], buf, sizeof(buf));
+	if(read(threads[this_thread->thread_id].worker_signal_events.pipe_sigquit[0], buf, sizeof(buf))){
+		log_error("[Thread %d] got SIGQUIT failure.", this_thread->thread_id);
+		return;
+	}
 	log_info("[Thread %d] got SIGQUIT, fast exit", this_thread->thread_id);
 	pthread_exit(0);
 }
@@ -184,7 +195,7 @@ static void handle_sighup(int sock, short flags, void *arg)
 	sd_notify(0, "READY=1");
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
-			signal_threads(&(threads[thread_id].worker_signal_events), threads[thread_id].worker_signal_events.pipe_sighup);
+			signal_threads(threads[thread_id].worker_signal_events.pipe_sighup);
 		}
 	}
 }
