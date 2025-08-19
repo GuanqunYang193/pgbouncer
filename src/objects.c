@@ -2090,12 +2090,12 @@ PgSocket *compare_connections_by_time(PgSocket *lhs, PgSocket *rhs)
 	return lhs->request_time < rhs->request_time ? lhs : rhs;
 }
 
-static void evict_pool_connection_with_old_connection(PgPool *pool, PgSocket *oldest_connection){
-	oldest_connection = compare_connections_by_time(oldest_connection, last_socket(&pool->idle_server_list));
+static void evict_pool_connection_with_old_connection(PgPool *pool, PgSocket **oldest_connection){
+	*oldest_connection = compare_connections_by_time(*oldest_connection, last_socket(&pool->idle_server_list));
 	/* only evict testing connections if nobody's waiting */
 	if (statlist_empty(&pool->waiting_client_list)) {
-		oldest_connection = compare_connections_by_time(oldest_connection, last_socket(&pool->used_server_list));
-		oldest_connection = compare_connections_by_time(oldest_connection, last_socket(&pool->tested_server_list));
+		*oldest_connection = compare_connections_by_time(*oldest_connection, last_socket(&pool->used_server_list));
+		*oldest_connection = compare_connections_by_time(*oldest_connection, last_socket(&pool->tested_server_list));
 	}
 }
 
@@ -2107,7 +2107,7 @@ static void evict_connection_cb(struct List *item, void *ctx){
 	} *data = ctx;
 	if (pool->db->name != data->db->name)
 		return;
-	evict_pool_connection_with_old_connection(pool, data->oldest_connection);
+	evict_pool_connection_with_old_connection(pool, &data->oldest_connection);
 }
 
 /* evict the single most idle connection from among all pools to make room in the db */
@@ -2129,7 +2129,7 @@ bool evict_connection(PgDatabase *db)
 			pool = container_of(item, PgPool, head);
 			if (pool->db->name != db->name)
 				continue;
-			evict_pool_connection_with_old_connection(pool, oldest_connection);
+			evict_pool_connection_with_old_connection(pool, &oldest_connection);
 		}
 	}
 
@@ -2162,7 +2162,7 @@ static void evict_user_connection_cb(struct List *item, void *ctx){
 	} *data = ctx;
 	if (pool->user_credentials != data->user_credentials)
 		return;
-	evict_pool_connection_with_old_connection(pool, data->oldest_connection);
+	evict_pool_connection_with_old_connection(pool, &data->oldest_connection);
 }
 
 /* evict the single most idle connection from among all pools to make room in the user */
@@ -2185,7 +2185,7 @@ bool evict_user_connection(PgCredentials *user_credentials)
 			pool = container_of(item, PgPool, head);
 			if (pool->user_credentials != user_credentials)
 				continue;
-			evict_pool_connection_with_old_connection(pool, oldest_connection);
+			evict_pool_connection_with_old_connection(pool, &oldest_connection);
 		}
 	}
 
