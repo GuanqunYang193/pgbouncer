@@ -2616,7 +2616,6 @@ void admin_setup(int thread_id)
 	PgPool *pool;
 	PgGlobalUser *user;
 	PktBuf *msg;
-	int res;
 
 	/* fake database */
 	db = add_database("pgbouncer", thread_id);
@@ -2668,6 +2667,12 @@ void admin_setup(int thread_id)
 	db->dbname = "pgbouncer";
 	pktbuf_put_string(msg, db->dbname);
 
+}
+
+// only init once to avoid memory leak
+void admin_regex_init(void){
+	int res;
+	
 	/* initialize regexes */
 	res = regcomp(&rc_cmd, cmd_normal_rx, REG_EXTENDED | REG_ICASE);
 	if (res != 0)

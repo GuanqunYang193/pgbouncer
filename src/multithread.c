@@ -50,8 +50,9 @@ void handle_sigterm(evutil_socket_t sock, short flags, void *arg)
 {
 	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	char buf[1];
-	if(read(threads[this_thread->thread_id].worker_signal_events.pipe_sigterm[0], buf, sizeof(buf))){
-
+	if(read(threads[this_thread->thread_id].worker_signal_events.pipe_sigterm[0], buf, sizeof(buf)) == -1){
+		log_error("[Thread %d] read SIGTERM pipe failure.", this_thread->thread_id);
+		return;
 	}
 	if (this_thread->cf_shutdown) {
 		log_info("[Thread %d] got SIGTERM while shutting down, fast exit", this_thread->thread_id);
@@ -90,8 +91,8 @@ static void handle_sigint(evutil_socket_t sock, short flags, void *arg)
 {
 	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	char buf[1];
-	if(read(threads[this_thread->thread_id].worker_signal_events.pipe_sigint[0], buf, sizeof(buf))){
-		log_error("[Thread %d] got SIGINT failure.", this_thread->thread_id);
+	if(read(threads[this_thread->thread_id].worker_signal_events.pipe_sigint[0], buf, sizeof(buf)) == -1){
+		log_error("[Thread %d] read SIGINT pipe failure.", this_thread->thread_id);
 		return;
 	}
 	if (this_thread->cf_shutdown) {
@@ -124,8 +125,8 @@ static void handle_sigquit_worker(evutil_socket_t sock, short flags, void *arg)
 {
 	Thread* this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	char buf[1];
-	if(read(threads[this_thread->thread_id].worker_signal_events.pipe_sigquit[0], buf, sizeof(buf))){
-		log_error("[Thread %d] got SIGQUIT failure.", this_thread->thread_id);
+	if(read(threads[this_thread->thread_id].worker_signal_events.pipe_sigquit[0], buf, sizeof(buf)) == -1){
+		log_error("[Thread %d] read SIGQUIT pipe failure.", this_thread->thread_id);
 		return;
 	}
 	log_info("[Thread %d] got SIGQUIT, fast exit", this_thread->thread_id);

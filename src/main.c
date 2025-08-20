@@ -1040,6 +1040,7 @@ int main(int argc, char *argv[])
 	} else {
 		admin_setup(-1);
 	}
+	admin_regex_init();
 
 	if (cf_reboot) {
 		log_warning("Online restart is deprecated, use so_reuseport instead");

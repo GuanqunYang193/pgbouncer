@@ -376,7 +376,7 @@ static void accept_client_handler(bool is_unix, int fd){
 static void pool_accept(evutil_socket_t sock, short flags, void *arg)
 {
 	struct ListenSocket *ls = arg;
-	struct ClientRequest client_request;
+	struct ClientRequest client_request = {0};
 	int fd;
 	union {
 		struct sockaddr_in in;
@@ -437,7 +437,7 @@ loop:
 
 static void handle_request(evutil_socket_t fd, short event, void* arg){
 	struct ClientRequest client_request; 
-	if(read(fd, &client_request, sizeof(client_request))){
+	if(read(fd, &client_request, sizeof(client_request)) == -1){
 		log_error("Failed to read from pipe");
 		return;
 	}
