@@ -1048,6 +1048,15 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 
 static void multithread_main_thread_full_maint(evutil_socket_t sock, short flags, void *arg){
 	MULTITHREAD_VISIT(multithread_mode, &adns_lock, adns_zone_cache_maint(adns));
+	FOR_EACH_THREAD(thread_id){
+		if(threads[thread_id].cf_shutdown != SHUTDOWN_IMMEDIATE){
+			return;
+		}
+	}
+	cf_shutdown = SHUTDOWN_IMMEDIATE;
+	cleanup_unix_sockets();
+	// TODO(beihao): Double Check if this is needed
+	// event_base_loopbreak(pgb_event_base);
 }
 
 void main_thread_janitor_setup(void){

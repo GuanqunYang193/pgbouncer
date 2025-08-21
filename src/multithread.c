@@ -77,7 +77,7 @@ static void handle_sigint_main(evutil_socket_t sock, short flags, void *arg)
 	if (cf_pause_mode == P_SUSPEND)
 		die("suspend was in progress, going down immediately");
 	cf_pause_mode = P_PAUSE;
-	cf_shutdown = SHUTDOWN_IMMEDIATE;
+	cf_shutdown = SHUTDOWN_WAIT_FOR_SERVERS;
 	cleanup_tcp_sockets();
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
