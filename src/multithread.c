@@ -37,7 +37,7 @@ void handle_sigterm_main(evutil_socket_t sock, short flags, void *arg)
 		die("takeover was in progress, going down immediately");
 	if (cf_pause_mode == P_SUSPEND)
 		die("suspend was in progress, going down immediately");
-	cf_shutdown = SHUTDOWN_IMMEDIATE;
+	cf_shutdown = SHUTDOWN_WAIT_FOR_CLIENTS;
 	cleanup_tcp_sockets();
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
@@ -60,7 +60,7 @@ void handle_sigterm(evutil_socket_t sock, short flags, void *arg)
 		exit(0);
 	}
 	log_info("[Thread %d] got SIGTERM, shutting down, waiting for all clients disconnect", this_thread->thread_id);
-	this_thread->cf_shutdown = SHUTDOWN_WAIT_FOR_SERVERS;
+	this_thread->cf_shutdown = SHUTDOWN_WAIT_FOR_CLIENTS;
 }
 
 static void handle_sigint_main(evutil_socket_t sock, short flags, void *arg)
