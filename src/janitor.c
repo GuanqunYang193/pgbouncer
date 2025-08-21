@@ -1055,8 +1055,7 @@ static void multithread_main_thread_full_maint(evutil_socket_t sock, short flags
 	}
 	cf_shutdown = SHUTDOWN_IMMEDIATE;
 	cleanup_unix_sockets();
-	// TODO(beihao): Double Check if this is needed
-	// event_base_loopbreak(pgb_event_base);
+	event_base_loopbreak(pgb_event_base);
 }
 
 void main_thread_janitor_setup(void){
