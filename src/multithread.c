@@ -385,15 +385,12 @@ static void event_base_destructor(void* base_ptr) {
 }
 
 void init_thread(int thread_id){
-	int flags;
 	threads[thread_id].thread_id = thread_id;
 	if (pipe(threads[thread_id].pipefd) < 0) {
 		die("Thread %d init failed",thread_id);
 	}
-	flags = fcntl(threads[thread_id].pipefd[1], F_GETFL, 0);
-	if (fcntl(threads[thread_id].pipefd[1], F_SETFL, flags | O_NONBLOCK) < 0) {
-		die("set pipe flag failed");
-	}
+	evutil_make_socket_nonblocking(threads[thread_id].pipefd[0]);
+	evutil_make_socket_nonblocking(threads[thread_id].pipefd[1]);
 	thread_safe_statlist_init(&(threads[thread_id].pool_list), NULL, true);
 	statlist_init(&(threads[thread_id].peer_pool_list), NULL);
 	statlist_init(&(threads[thread_id].login_client_list), NULL);
