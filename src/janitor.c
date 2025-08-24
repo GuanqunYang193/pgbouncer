@@ -213,12 +213,12 @@ static void per_loop_activate(PgPool *pool)
 	statlist_for_each_safe(item, &pool->waiting_client_list, tmp) {
 		PktBuf *buf;
 		bool res;
+		usec_t time = get_multithread_time();
 		client = container_of(item, PgSocket, head);
-
 		if (client->state == CL_WAITING
 		    && !client->sent_wait_notification
 		    && client->welcome_sent
-		    && ((get_cached_time() - client->wait_start) / USEC) > cf_query_wait_notify
+		    && ((time - client->wait_start) / USEC) > cf_query_wait_notify
 		    && cf_query_wait_notify > 0) {
 			buf = pktbuf_dynamic(256);
 			pktbuf_write_Notice(
