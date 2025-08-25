@@ -1000,8 +1000,7 @@ static PgPool *new_pool(PgDatabase *db, PgCredentials *user_credentials, int thr
 	/* keep pools in db/user order to make stats faster */
 
 	if(multithread_mode){
-		// TODO check locked
-		put_in_order(&pool->head, &(((struct ThreadSafeStatList *)pool_list_ptr)->list), cmp_pool);
+		thread_safe_put_in_order(&pool->head, (struct ThreadSafeStatList *)pool_list_ptr, cmp_pool);
 	}else{
 		put_in_order(&pool->head, (struct StatList *)pool_list_ptr, cmp_pool);
 	}
