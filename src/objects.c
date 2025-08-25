@@ -119,10 +119,7 @@ int get_total_active_client_count(void)
 	int total_count_from_all_threads;
 	if(!multithread_mode)
 		return slab_active_count(client_cache);
-	total_count_from_all_threads = 0;
-	FOR_EACH_THREAD(thread_id){	
-		total_count_from_all_threads += slab_active_count(threads[thread_id].client_cache);
-	}
+	MULTITHREAD_VISIT(multithread_mode, &client_count_lock, {total_count_from_all_threads = client_count;});
 	return total_count_from_all_threads;
 }
 
@@ -277,6 +274,8 @@ void init_objects_multithread(void)
 
 	if (!thread_safe_credentials_cache)
 		fatal("cannot create initial thread_safe_credentials_cache");
+	
+	spin_lock_init(&client_count_lock);
 }
 
 static void do_iobuf_reset(void *arg)
@@ -335,6 +334,9 @@ static void client_free(PgSocket *client)
 	varcache_clean(&client->vars);
 	slab_free(var_list_cache_, client->vars.var_list);
 	slab_free(client_cache_, client);
+	if(multithread_mode){
+		MULTITHREAD_VISIT(multithread_mode, &client_count_lock, {client_count--;});
+	}
 }
 
 /* free all memory related to the given server */
@@ -2366,7 +2368,9 @@ PgSocket *accept_client(int sock, bool is_unix)
 		safe_close(sock);
 		return NULL;
 	}
-
+	if(multithread_mode){
+		MULTITHREAD_VISIT(multithread_mode, &client_count_lock, {client_count++;});
+	}
 	client->connect_time = client->request_time = get_multithread_time_with_id(thread_id);
 	client->query_start = 0;
 

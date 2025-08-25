@@ -952,4 +952,8 @@ extern pthread_key_t event_base_key;
 extern pthread_key_t thread_pointer;
 extern pthread_key_t thread_id;
 
+
+extern int client_count;
+extern SpinLock client_count_lock;
+
 #endif /* BOUNCER_H */
