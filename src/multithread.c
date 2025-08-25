@@ -20,7 +20,7 @@ static void signal_threads(int signal_pipe[2]){
 	if(!multithread_mode){
 		return;
 	}
-	if(write(signal_pipe[1], "x", 1)){
+	if(write(signal_pipe[1], "x", 1) == -1){
 		log_error("Failed to write to pipe");
 		return;
 	}
