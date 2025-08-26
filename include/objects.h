@@ -108,7 +108,6 @@ int get_active_client_count(int thread_id);
 int get_active_server_count(int thread_id);
 
 int get_total_active_client_count(void);
-int get_total_active_server_count(void);
 
 void tag_pool_dirty(PgPool *pool);
 void tag_database_dirty(PgDatabase *db, int thread_id);

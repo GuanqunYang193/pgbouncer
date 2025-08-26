@@ -123,19 +123,6 @@ int get_total_active_client_count(void)
 	return total_count_from_all_threads;
 }
 
-/* fast way to get number of active servers */
-int get_total_active_server_count(void)
-{
-	int total_count_from_all_threads;
-	if(!multithread_mode)
-		return slab_active_count(server_cache);
-	total_count_from_all_threads = 0;
-	FOR_EACH_THREAD(thread_id){	
-		total_count_from_all_threads += slab_active_count(threads[thread_id].server_cache);
-	}
-	return total_count_from_all_threads;
-}
-
 static void construct_client(void *obj)
 {
 	PgSocket *client = obj;
