@@ -207,6 +207,19 @@ async def bouncer(pg, tmp_path):
 
 @pytest.mark.asyncio
 @pytest.fixture
+async def bouncer_multithread(pg, tmp_path):
+    """Starts a new multithreaded PgBouncer process with 4 threads"""
+    bouncer = Bouncer(pg, tmp_path / "bouncer", thread_count=4)
+
+    await bouncer.start()
+
+    yield bouncer
+
+    await bouncer.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.fixture
 async def bouncer_with_openldap(pg, tmp_path, monkeypatch):
     """Starts a new PgBouncer process"""
     bouncer = Bouncer(pg, tmp_path / "bouncer")
@@ -219,6 +232,47 @@ async def bouncer_with_openldap(pg, tmp_path, monkeypatch):
     yield bouncer
 
     ldap.cleanup()
+    await bouncer.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.fixture
+async def bouncer_with_openldap_multithread(pg, tmp_path, monkeypatch):
+    """Starts a new multithreaded PgBouncer process with OpenLDAP support"""
+    bouncer = Bouncer(pg, tmp_path / "bouncer", thread_count=4)
+    ldap = OpenLDAP(tmp_path)
+    bouncer.ldap = ldap
+    monkeypatch.setenv("LDAPCONF", str(tmp_path / "ldap/ldap.conf"))
+    ldap.startup()
+    await bouncer.start()
+
+    yield bouncer
+
+    ldap.cleanup()
+    await bouncer.cleanup()
+
+
+def pytest_generate_tests(metafunc):
+    """Generate parameterized tests for different thread counts"""
+    if "thread_count" in metafunc.fixturenames:
+        # Test with different thread counts: 1 (single-threaded), 2, 4, 8
+        metafunc.parametrize("thread_count", [1, 2, 4, 8])
+
+
+@pytest.mark.asyncio
+@pytest.fixture
+async def bouncer_parametrized(pg, tmp_path, thread_count):
+    """Parameterized fixture that creates PgBouncer with different thread counts
+    
+    This fixture is automatically parameterized by pytest_generate_tests to test
+    different thread counts: 1, 2, 4, 8
+    """
+    bouncer = Bouncer(pg, tmp_path / "bouncer", thread_count=thread_count)
+
+    await bouncer.start()
+
+    yield bouncer
+
     await bouncer.cleanup()
 
 

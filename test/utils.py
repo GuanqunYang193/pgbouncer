@@ -930,6 +930,7 @@ class Bouncer(QueryRunner):
         base_ini_path=BOUNCER_INI,
         base_auth_path=BOUNCER_AUTH,
         port=None,
+        thread_count=None,
     ):
         if port:
             self.port_lock = None
@@ -940,6 +941,7 @@ class Bouncer(QueryRunner):
 
         self.process: typing.Optional[subprocess.Popen] = None
         self.aprocess: typing.Optional[asyncio.subprocess.Process] = None
+        self.thread_count = thread_count
         config_dir.mkdir()
         self.config_dir = config_dir
         self.ini_path = self.config_dir / "test.ini"
@@ -1001,11 +1003,12 @@ class Bouncer(QueryRunner):
         """returns the basecommand that is used to run PgBouncer
 
         This includes valgrind and all its arguments when ENABLE_VALGRIND is
-        set
+        set, and thread count when specified.
         """
+        cmd = []
         if ENABLE_VALGRIND:
             valgrind_log_file = self.config_dir / "valgrind.%p.log"
-            return [
+            cmd.extend([
                 "valgrind",
                 "--quiet",
                 "--leak-check=full",
@@ -1013,9 +1016,15 @@ class Bouncer(QueryRunner):
                 "--track-origins=yes",
                 "--error-markers=VALGRIND-ERROR-BEGIN,VALGRIND-ERROR-END",
                 f"--log-file={valgrind_log_file}",
-                str(BOUNCER_EXE),
-            ]
-        return [str(BOUNCER_EXE)]
+            ])
+        
+        cmd.append(str(BOUNCER_EXE))
+        
+        # Add thread count if specified
+        if self.thread_count is not None:
+            cmd.extend(["-T", str(self.thread_count)])
+            
+        return cmd
 
     async def start(self):
         # Due to using WindowsSelectorEventLoopPolicy for support with psycopg
