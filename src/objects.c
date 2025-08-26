@@ -130,9 +130,7 @@ int get_total_active_server_count(void)
 	if(!multithread_mode)
 		return slab_active_count(server_cache);
 	total_count_from_all_threads = 0;
-	FOR_EACH_THREAD(thread_id){	
-		total_count_from_all_threads += slab_active_count(threads[thread_id].server_cache);
-	}
+	MULTITHREAD_VISIT(multithread_mode, &client_count_lock, {total_count_from_all_threads = server_count;});
 	return total_count_from_all_threads;
 }
 
@@ -276,6 +274,7 @@ void init_objects_multithread(void)
 		fatal("cannot create initial thread_safe_credentials_cache");
 	
 	spin_lock_init(&client_count_lock);
+	spin_lock_init(&server_count_lock);
 }
 
 static void do_iobuf_reset(void *arg)
@@ -362,6 +361,9 @@ static void server_free(PgSocket *server)
 	varcache_clean(&server->vars);
 	slab_free(var_list_cache_ptr, server->vars.var_list);
 	slab_free(server_cache_ptr, server);
+	if(multithread_mode){
+		MULTITHREAD_VISIT(multithread_mode, &server_count_lock, {server_count--;});
+	}
 }
 
 
@@ -2337,6 +2339,9 @@ force_new:
 		log_debug("launch_new_connection: no memory");
 		return;
 	}
+	if(multithread_mode){
+		MULTITHREAD_VISIT(multithread_mode, &server_count_lock, {server_count++;});
+	}
 
 	/* initialize it */
 	server->pool = pool;
@@ -2812,6 +2817,9 @@ bool use_server_socket(int fd, PgAddr *addr,
 	server = slab_alloc(server_cache_ptr);
 	if (!server)
 		return false;
+	if(multithread_mode){
+		MULTITHREAD_VISIT(multithread_mode, &server_count_lock, {server_count++;});
+	}
 
 	res = sbuf_accept(&server->sbuf, fd, pga_is_unix(addr));
 	if (!res)

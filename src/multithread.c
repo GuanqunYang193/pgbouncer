@@ -14,7 +14,9 @@ pthread_key_t event_base_key;
 pthread_key_t thread_pointer;
 Thread *threads;
 int client_count = 0;
-SpinLock client_count_lock;;
+SpinLock client_count_lock;
+int server_count = 0;
+SpinLock server_count_lock;
 
 static void signal_threads(int signal_pipe[2]){
 	if(!multithread_mode){
