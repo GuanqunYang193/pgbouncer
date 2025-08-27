@@ -2357,15 +2357,7 @@ static bool admin_show_stats_averages(PgSocket *admin, const char *arg)
 
 static bool admin_show_totals(PgSocket *admin, const char *arg)
 {
-	if (multithread_mode) {
-		bool res = true;
-		FOR_EACH_THREAD(thread_id){
-			// TODO(beihao): thread safe version
-			res &= show_stat_totals(admin, (struct StatList *)&(threads[thread_id].pool_list));
-		}
-		return res;
-	}
-	return show_stat_totals(admin, &pool_list);
+	return show_stat_totals(admin);
 }
 
 

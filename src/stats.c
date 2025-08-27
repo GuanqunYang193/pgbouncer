@@ -396,7 +396,7 @@ bool admin_database_stats_averages(PgSocket *client)
 	return true;
 }
 
-bool show_stat_totals(PgSocket *client, struct StatList *pool_list)
+bool show_stat_totals(PgSocket *client)
 {
 	PgPool *pool;
 	struct List *item;
@@ -412,11 +412,22 @@ bool show_stat_totals(PgSocket *client, struct StatList *pool_list)
 		return true;
 	}
 
-
-	statlist_for_each(item, pool_list) {
-		pool = container_of(item, PgPool, head);
-		stat_add(&st_total, &pool->stats);
-		stat_add(&old_total, &pool->older_stats);
+	if (multithread_mode) {
+		FOR_EACH_THREAD(thread_id) {
+			lock_and_pause_thread(thread_id);
+			statlist_for_each(item, (struct StatList *)&threads[thread_id].pool_list) {
+				pool = container_of(item, PgPool, head);
+				stat_add(&st_total, &pool->stats);
+				stat_add(&old_total, &pool->older_stats);
+			}
+			unlock_and_resume_thread(thread_id);
+		}
+	} else {
+		statlist_for_each(item, &pool_list) {
+			pool = container_of(item, PgPool, head);
+			stat_add(&st_total, &pool->stats);
+			stat_add(&old_total, &pool->older_stats);
+		}
 	}
 
 	calc_average(&avg, &st_total, &old_total, get_multithread_time());
