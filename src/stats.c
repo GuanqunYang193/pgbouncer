@@ -21,6 +21,7 @@
 
 static struct event ev_stats;
 static usec_t old_stamp, new_stamp;
+static PgStats multithread_old_total;
 
 static void reset_stats(PgStats *stat)
 {
@@ -80,17 +81,11 @@ static void calc_average(PgStats *avg, PgStats *cur, PgStats *old, usec_t curren
 	uint64_t ps_bind_count;
 	usec_t dur;
 
-	if (old_stamp <= 0) {
-		reset_stats(avg);
-		return;
-	}
+	log_info("calc_average: cur->query_count: %llu, old->query_count: %llu", cur->query_count, old->query_count);
 
-	if (cur->server_assignment_count == 0) {
-		reset_stats(avg);
-		return;
-	}
 
 	dur = current_time - old_stamp;
+	log_info("calc_average: dur: %llu", dur);
 
 	reset_stats(avg);
 
@@ -503,10 +498,9 @@ static void multithread_stats(evutil_socket_t s, short flags, void *arg){
 }
 
 static void multithread_collect_stats(evutil_socket_t s, short flags, void *arg){
-	PgStats old_total, cur_total;
+	PgStats cur_total;
 	PgStats avg;
 
-	reset_stats(&old_total);
 	reset_stats(&cur_total);
 
 	FOR_EACH_THREAD(thread_id){
@@ -519,7 +513,10 @@ static void multithread_collect_stats(evutil_socket_t s, short flags, void *arg)
 	old_stamp = new_stamp;
 	// use global time rather than per-thread time
 	new_stamp = get_cached_time();
-	calc_average(&avg, &cur_total, &old_total, get_cached_time());
+	calc_average(&avg, &cur_total, &multithread_old_total, get_cached_time());
+	
+	// Save current stats as old stats for next period
+	multithread_old_total = cur_total;
 
 	if (cf_log_stats) {
 		log_info(
@@ -651,6 +648,12 @@ void stats_setup(void)
 	struct timeval period = { cf_stats_period, 0 };
 	new_stamp = get_cached_time();
 	old_stamp = new_stamp - USEC;
+	
+	/* Initialize multithread old stats */
+	if(multithread_mode){
+		reset_stats(&multithread_old_total);
+	}
+	
 	/* launch stats */
 	if(multithread_mode){
 		event_assign(&ev_stats, pgb_event_base, -1, EV_PERSIST, multithread_collect_stats, NULL);
