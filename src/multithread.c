@@ -468,7 +468,7 @@ void unlock_thread(int thread_id){
 }
 
 void lock_and_pause_thread(int thread_id){
-	if(thread_id == get_current_thread_id(thread_id)){
+	if(thread_id == get_current_thread_id(multithread_mode)){
 		return;
 	}
 	lock_thread(thread_id);
@@ -479,7 +479,7 @@ void lock_and_pause_thread(int thread_id){
 }
 
 void unlock_and_resume_thread(int thread_id){
-	if(thread_id == get_current_thread_id(thread_id)){
+	if(thread_id == get_current_thread_id(multithread_mode)){
 		return;
 	}
 	resume_thread(thread_id);
