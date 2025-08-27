@@ -1104,7 +1104,7 @@ static bool admin_show_servers(PgSocket *admin, const char *arg)
 		FOR_EACH_THREAD(thread_id){
 			lock_and_pause_thread(thread_id);
 			
-			statlist_for_each(item, &pool_list) {
+			statlist_for_each(item, &(threads[thread_id].pool_list.list)) {
 				pool = container_of(item, PgPool, head);
 				show_server_list(buf, pool, thread_id, false);
 			}
