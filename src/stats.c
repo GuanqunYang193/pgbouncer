@@ -81,11 +81,7 @@ static void calc_average(PgStats *avg, PgStats *cur, PgStats *old, usec_t curren
 	uint64_t ps_bind_count;
 	usec_t dur;
 
-	log_info("calc_average: cur->query_count: %llu, old->query_count: %llu", cur->query_count, old->query_count);
-
-
 	dur = current_time - old_stamp;
-	log_info("calc_average: dur: %llu", dur);
 
 	reset_stats(avg);
 
