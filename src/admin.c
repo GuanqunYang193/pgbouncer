@@ -2342,42 +2342,17 @@ static bool admin_show_version(PgSocket *admin, const char *arg)
 
 static bool admin_show_stats(PgSocket *admin, const char *arg)
 {
-	if (multithread_mode) {
-		bool res = true;
-		FOR_EACH_THREAD(thread_id){
-			// TODO(beihao): thread safe version
-			res &= admin_database_stats(admin, (struct StatList *)&threads[thread_id].pool_list);
-		}
-		return res;
-	}
-
-	return admin_database_stats(admin, &pool_list);
+	return admin_database_stats(admin);
 }
 
 static bool admin_show_stats_totals(PgSocket *admin, const char *arg)
 {
-	if (multithread_mode) {
-		bool res = true;
-		FOR_EACH_THREAD(thread_id){
-			// TODO(beihao): thread safe version
-			res &= admin_database_stats_totals(admin, (struct StatList *)&(threads[thread_id].pool_list));
-		}
-		return res;
-	}
-	return admin_database_stats_totals(admin, &pool_list);
+	return admin_database_stats_totals(admin);
 }
 
 static bool admin_show_stats_averages(PgSocket *admin, const char *arg)
 {
-	if (multithread_mode) {
-		bool res = true;
-		FOR_EACH_THREAD(thread_id){
-			// TODO(beihao): thread safe version
-			res &= admin_database_stats_averages(admin, (struct StatList *)&(threads[thread_id].pool_list));
-		}
-		return res;
-	}
-	return admin_database_stats_averages(admin, &pool_list);
+	return admin_database_stats_averages(admin);
 }
 
 static bool admin_show_totals(PgSocket *admin, const char *arg)
