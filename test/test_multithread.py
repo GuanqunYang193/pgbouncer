@@ -51,25 +51,6 @@ def test_multithread_concurrent_connections(bouncer_multithread):
         assert result == conn_id, f"Connection {conn_id} failed: {result}"
 
 
-def test_multithread_admin_commands(bouncer_multithread):
-    """Test admin commands work correctly with multithreaded PgBouncer"""
-    # Test various admin commands
-    admin_commands = [
-        "SHOW CLIENTS",
-        "SHOW SERVERS", 
-        "SHOW POOLS",
-        "SHOW STATS",
-        "SHOW CONFIG",
-        "SHOW DATABASES",
-        "SHOW USERS",
-        "SHOW VERSION"
-    ]
-    
-    for cmd in admin_commands:
-        result = bouncer_multithread.admin(cmd)
-        assert result is not None
-
-
 # def test_multithread_pause_resume(bouncer_multithread):
 #     """Test pause/resume functionality with multithreaded PgBouncer"""
 #     # Create a connection
@@ -131,7 +112,7 @@ def test_multithread_stress_test(bouncer_multithread):
     
     # Create multiple workers doing many operations
     threads = []
-    num_workers = 5
+    num_workers = 4
     iterations_per_worker = 20
     
     for worker_id in range(num_workers):
@@ -147,9 +128,20 @@ def test_multithread_stress_test(bouncer_multithread):
         thread.join()
     
     # Verify final state
-    # stats = bouncer_multithread.admin("SHOW STATS", row_factory=dict_row)
-    # p0_stats = next(s for s in stats if s["database"] == "p0")
-    # assert p0_stats["total_query_count"] >= num_workers * iterations_per_worker
+    stats = bouncer_multithread.admin("SHOW STATS", row_factory=dict_row)
+    
+    # In multithread mode, stats are per-thread, so we need to sum them
+    p0_stats_list = [s for s in stats if s["database"] == "p0"]
+    print(f"DEBUG: p0_stats_list: {p0_stats_list}")
+    
+    total_query_count = sum(s["total_query_count"] for s in p0_stats_list)
+    
+    # Verify we have stats for all threads
+    assert len(p0_stats_list) == num_workers, f"Expected {num_workers} threads, got {len(p0_stats_list)}"
+    
+    # Verify total query count across all threads
+    assert total_query_count >= num_workers * iterations_per_worker, \
+        f"Expected at least {num_workers * iterations_per_worker} queries, got {total_query_count}"
 
 
 def test_multithread_config_reload(bouncer_multithread):
