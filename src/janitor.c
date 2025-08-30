@@ -424,6 +424,9 @@ void per_loop_maint(void)
 		} ctx = { &active_count, &waiting_count, &partial_pause, &partial_wait, &force_suspend };
 
 		thread_safe_statlist_iterate((struct ThreadSafeStatList*)pool_list_ptr, per_loop_maint_cb, &ctx);
+		
+		/* Store partial_pause state in thread structure */
+		threads[thread_id].partial_pause = partial_pause;
 	} else {
 		statlist_for_each(item, (struct StatList*)pool_list_ptr) {
 			pool = container_of(item, PgPool, head);
@@ -455,7 +458,15 @@ void per_loop_maint(void)
 
 	login_client_list_ = GET_MULTITHREAD_LIST_PTR(login_client_list, thread_id);
 
-	switch (cf_pause_mode) {
+	int thread_pause_mode;
+	if (multithread_mode) {
+		int thread_id = get_current_thread_id(multithread_mode);
+		thread_pause_mode = threads[thread_id].cf_pause_mode;
+	} else {
+		thread_pause_mode = cf_pause_mode;
+	}
+
+	switch (thread_pause_mode) {
 	case P_SUSPEND:
 		if (force_suspend) {
 			close_client_list(login_client_list_, "suspend_timeout");
@@ -464,17 +475,35 @@ void per_loop_maint(void)
 		}
 	/* fallthrough */
 	case P_PAUSE:
-		if (!active_count)
-			admin_pause_done();
+		if (!active_count) {
+			if (multithread_mode) {
+				int thread_id = get_current_thread_id(multithread_mode);
+				threads[thread_id].pause_ready = true;
+			} else {
+				admin_pause_done();
+			}
+		}
 		break;
 	case P_NONE:
-		if (partial_pause && !active_count)
-			admin_pause_done();
+		if (partial_pause && !active_count) {
+			if (multithread_mode) {
+				int thread_id = get_current_thread_id(multithread_mode);
+				threads[thread_id].pause_ready = true;
+			} else {
+				admin_pause_done();
+			}
+		}
 		break;
 	}
 
-	if (partial_wait && !waiting_count)
-		admin_wait_close_done();
+	if (partial_wait && !waiting_count) {
+		if (multithread_mode) {
+			int thread_id = get_current_thread_id(multithread_mode);
+			threads[thread_id].wait_close_ready = true;
+		} else {
+			admin_wait_close_done();
+		}
+	}
 }
 
 /* maintaining clients in pool */
@@ -1048,6 +1077,56 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 
 static void multithread_main_thread_full_maint(evutil_socket_t sock, short flags, void *arg){
 	MULTITHREAD_VISIT(multithread_mode, &adns_lock, adns_zone_cache_maint(adns));
+	
+	/* Check if all threads are ready for pause */
+	bool any_pause_mode = false;
+	FOR_EACH_THREAD(thread_id) {
+		if (threads[thread_id].cf_pause_mode == P_PAUSE || 
+		    (threads[thread_id].cf_pause_mode == P_NONE && threads[thread_id].partial_pause)) {
+			any_pause_mode = true;
+			break;
+		}
+	}
+	
+	if (any_pause_mode) {
+		bool all_threads_ready = true;
+		FOR_EACH_THREAD(thread_id) {
+			if (!threads[thread_id].pause_ready) {
+				all_threads_ready = false;
+				break;
+			}
+		}
+		
+		if (all_threads_ready) {
+			/* All threads are ready, send admin response */
+			admin_pause_done();
+			
+			/* Reset flags */
+			FOR_EACH_THREAD(thread_id) {
+				threads[thread_id].pause_ready = false;
+			}
+		}
+	}
+	
+	/* Check if all threads are ready for wait_close */
+	bool all_wait_close_ready = true;
+	FOR_EACH_THREAD(thread_id) {
+		if (!threads[thread_id].wait_close_ready) {
+			all_wait_close_ready = false;
+			break;
+		}
+	}
+	
+	if (all_wait_close_ready) {
+		/* All threads are ready, send admin response */
+		admin_wait_close_done();
+		
+		/* Reset flags */
+		FOR_EACH_THREAD(thread_id) {
+			threads[thread_id].wait_close_ready = false;
+		}
+	}
+	
 	FOR_EACH_THREAD(thread_id){
 		if(threads[thread_id].cf_shutdown != SHUTDOWN_IMMEDIATE){
 			return;

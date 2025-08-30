@@ -135,6 +135,10 @@ typedef struct Thread {
     struct PktBuf *temp_pktbuf;
 
     int cf_shutdown;
+    int cf_pause_mode;  /* Thread-local pause mode */
+    bool pause_ready;   /* Thread ready for pause response */
+    bool wait_close_ready; /* Thread ready for wait_close response */
+    bool partial_pause; /* Thread has database-specific pauses */
 
     unsigned int seq;
 

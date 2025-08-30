@@ -139,6 +139,14 @@ static void handle_sigusr1(int sock, short flags, void *arg)
 {
 	if (cf_pause_mode == P_NONE) {
 		log_info("got SIGUSR1, pausing all activity");
+		if (multithread_mode) {
+			/* Set pause mode on all threads */
+			FOR_EACH_THREAD(thread_id) {
+				lock_and_pause_thread(thread_id);
+				threads[thread_id].cf_pause_mode = P_PAUSE;
+				unlock_and_resume_thread(thread_id);
+			}
+		}
 		cf_pause_mode = P_PAUSE;
 	} else {
 		log_info("got SIGUSR1, but already paused/suspended");
@@ -152,13 +160,35 @@ static void handle_sigusr2(int sock, short flags, void *arg)
 		return;
 	}
 	switch (cf_pause_mode) {
-	case P_SUSPEND:
-		log_info("got SIGUSR2, continuing from SUSPEND");
+			case P_SUSPEND:
+			log_info("got SIGUSR2, continuing from SUSPEND");
+			if (multithread_mode) {
+				/* Reset pause mode on all threads */
+				FOR_EACH_THREAD(thread_id) {
+					lock_and_pause_thread(thread_id);
+					threads[thread_id].cf_pause_mode = P_NONE;
+					threads[thread_id].pause_ready = false;
+					threads[thread_id].wait_close_ready = false;
+					threads[thread_id].partial_pause = false;
+					unlock_and_resume_thread(thread_id);
+				}
+			}
 		resume_all();
 		cf_pause_mode = P_NONE;
 		break;
-	case P_PAUSE:
-		log_info("got SIGUSR2, continuing from PAUSE");
+			case P_PAUSE:
+			log_info("got SIGUSR2, continuing from PAUSE");
+			if (multithread_mode) {
+				/* Reset pause mode on all threads */
+				FOR_EACH_THREAD(thread_id) {
+					lock_and_pause_thread(thread_id);
+					threads[thread_id].cf_pause_mode = P_NONE;
+					threads[thread_id].pause_ready = false;
+					threads[thread_id].wait_close_ready = false;
+					threads[thread_id].partial_pause = false;
+					unlock_and_resume_thread(thread_id);
+				}
+			}
 		cf_pause_mode = P_NONE;
 		break;
 	case P_NONE:
@@ -402,6 +432,10 @@ void init_thread(int thread_id){
 	statlist_init(&(threads[thread_id].justfree_server_list), NULL);
 	threads[thread_id].vpool = NULL;
 	threads[thread_id].cf_shutdown = SHUTDOWN_NONE;
+	threads[thread_id].cf_pause_mode = P_NONE;
+	threads[thread_id].pause_ready = false;
+	threads[thread_id].wait_close_ready = false;
+	threads[thread_id].partial_pause = false;
 	threads[thread_id].thread_metadata.thread_status = THREAD_RUNNING;
 	spin_lock_init(&(threads[thread_id].thread_metadata.thread_lock));
 }
