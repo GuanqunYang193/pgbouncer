@@ -263,6 +263,7 @@ void init_objects_multithread(void)
 		fatal("cannot create initial thread_safe_credentials_cache");
 	
 	spin_lock_init(&client_count_lock);
+	spin_lock_init(&total_active_count_lock);
 }
 
 static void do_iobuf_reset(void *arg)

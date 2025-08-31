@@ -472,19 +472,17 @@ void per_loop_maint(void)
 			close_client_list(login_client_list_, "suspend_timeout");
 		} else {
 			active_count = statlist_count(login_client_list_);
-		}
-		/* Store active count in thread structure for multithread coordination */
-		if (multithread_mode) {
-			int thread_id = get_current_thread_id(multithread_mode);
-			threads[thread_id].active_count = active_count;
+			/* Store active count in thread structure for multithread coordination */
+			if (multithread_mode) {
+				int thread_id = get_current_thread_id(multithread_mode);
+				threads[thread_id].active_count = active_count;
+				MULTITHREAD_VISIT(multithread_mode, &total_active_count_lock, {
+					total_active_count += active_count;
+				});
+			}
 		}
 	/* fallthrough */
 	case P_PAUSE:
-		/* Store active count in thread structure for multithread coordination */
-		if (multithread_mode) {
-			int thread_id = get_current_thread_id(multithread_mode);
-			threads[thread_id].active_count = active_count;
-		}
 		if (!active_count) {
 			if (multithread_mode) {
 				int thread_id = get_current_thread_id(multithread_mode);
@@ -1124,12 +1122,6 @@ static void multithread_main_thread_full_maint(evutil_socket_t sock, short flags
 	
 	/* Handle SUSPEND mode */
 	if (any_suspend_mode) {
-		/* Calculate total active count across all threads */
-		total_active_count = 0;
-		FOR_EACH_THREAD(thread_id) {
-			total_active_count += threads[thread_id].active_count;
-		}
-		
 		/* If total active count is 0, all threads are ready for suspend */
 		if (total_active_count == 0) {
 			/* All threads are ready, send admin response */

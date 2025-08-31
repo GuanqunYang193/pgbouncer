@@ -156,7 +156,6 @@ typedef struct ClientRequest {
 
 extern Thread *threads;
 extern int next_thread;
-extern int total_active_count;  /* Total active count across all threads */
 
 void signal_setup(struct event_base * base, struct SignalEvent* signal_event);
 void start_threads(void);

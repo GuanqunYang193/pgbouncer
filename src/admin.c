@@ -1691,6 +1691,9 @@ static void full_resume(void)
 			threads[thread_id].active_count = 0;
 			unlock_and_resume_thread(thread_id);
 		}
+		MULTITHREAD_VISIT(multithread_mode, &total_active_count_lock, {
+			total_active_count = 0;
+		});
 	}
 	cf_pause_mode = P_NONE;
 	if (tmp_mode == P_SUSPEND)
@@ -1721,6 +1724,9 @@ static bool admin_cmd_resume(PgSocket *admin, const char *arg)
 					unlock_and_resume_thread(thread_id);
 				}
 				cf_pause_mode = P_NONE;
+				MULTITHREAD_VISIT(multithread_mode, &total_active_count_lock, {
+					total_active_count = 0;
+				});
 			}
 			/* Call full_resume with the stored mode */
 			if (tmp_mode == P_SUSPEND) {

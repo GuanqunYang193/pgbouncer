@@ -16,6 +16,7 @@ Thread *threads;
 int client_count = 0;
 SpinLock client_count_lock;
 int total_active_count = 0;  /* Total active count across all threads */
+SpinLock total_active_count_lock;
 
 static void signal_threads(int signal_pipe[2]){
 	if(!multithread_mode){
@@ -148,6 +149,9 @@ static void handle_sigusr1(int sock, short flags, void *arg)
 				threads[thread_id].active_count = 0;
 				unlock_and_resume_thread(thread_id);
 			}
+			MULTITHREAD_VISIT(multithread_mode, &total_active_count_lock, {
+				total_active_count = 0;
+			});
 		}
 		cf_pause_mode = P_PAUSE;
 	} else {
@@ -175,6 +179,9 @@ static void handle_sigusr2(int sock, short flags, void *arg)
 					threads[thread_id].active_count = 0;
 					unlock_and_resume_thread(thread_id);
 				}
+				MULTITHREAD_VISIT(multithread_mode, &total_active_count_lock, {
+					total_active_count = 0;
+				});
 			}
 		resume_all();
 		cf_pause_mode = P_NONE;
@@ -192,6 +199,9 @@ static void handle_sigusr2(int sock, short flags, void *arg)
 					threads[thread_id].active_count = 0;
 					unlock_and_resume_thread(thread_id);
 				}
+				MULTITHREAD_VISIT(multithread_mode, &total_active_count_lock, {
+					total_active_count = 0;
+				});
 			}
 		cf_pause_mode = P_NONE;
 		break;
