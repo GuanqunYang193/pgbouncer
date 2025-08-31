@@ -14,7 +14,8 @@ pthread_key_t event_base_key;
 pthread_key_t thread_pointer;
 Thread *threads;
 int client_count = 0;
-SpinLock client_count_lock;;
+SpinLock client_count_lock;
+int total_active_count = 0;  /* Total active count across all threads */
 
 static void signal_threads(int signal_pipe[2]){
 	if(!multithread_mode){
@@ -144,6 +145,7 @@ static void handle_sigusr1(int sock, short flags, void *arg)
 			FOR_EACH_THREAD(thread_id) {
 				lock_and_pause_thread(thread_id);
 				threads[thread_id].cf_pause_mode = P_PAUSE;
+				threads[thread_id].active_count = 0;
 				unlock_and_resume_thread(thread_id);
 			}
 		}
@@ -159,7 +161,7 @@ static void handle_sigusr2(int sock, short flags, void *arg)
 		log_info("got SIGUSR2 while shutting down, ignoring");
 		return;
 	}
-	switch (cf_pause_mode) {
+			switch (cf_pause_mode) {
 			case P_SUSPEND:
 			log_info("got SIGUSR2, continuing from SUSPEND");
 			if (multithread_mode) {
@@ -170,6 +172,7 @@ static void handle_sigusr2(int sock, short flags, void *arg)
 					threads[thread_id].pause_ready = false;
 					threads[thread_id].wait_close_ready = false;
 					threads[thread_id].partial_pause = false;
+					threads[thread_id].active_count = 0;
 					unlock_and_resume_thread(thread_id);
 				}
 			}
@@ -186,6 +189,7 @@ static void handle_sigusr2(int sock, short flags, void *arg)
 					threads[thread_id].pause_ready = false;
 					threads[thread_id].wait_close_ready = false;
 					threads[thread_id].partial_pause = false;
+					threads[thread_id].active_count = 0;
 					unlock_and_resume_thread(thread_id);
 				}
 			}
@@ -436,6 +440,7 @@ void init_thread(int thread_id){
 	threads[thread_id].pause_ready = false;
 	threads[thread_id].wait_close_ready = false;
 	threads[thread_id].partial_pause = false;
+	threads[thread_id].active_count = 0;
 	threads[thread_id].thread_metadata.thread_status = THREAD_RUNNING;
 	spin_lock_init(&(threads[thread_id].thread_metadata.thread_lock));
 }

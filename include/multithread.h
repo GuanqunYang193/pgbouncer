@@ -139,6 +139,7 @@ typedef struct Thread {
     bool pause_ready;   /* Thread ready for pause response */
     bool wait_close_ready; /* Thread ready for wait_close response */
     bool partial_pause; /* Thread has database-specific pauses */
+    int active_count;   /* Thread-local active count for pause/suspend */
 
     unsigned int seq;
 
@@ -155,6 +156,7 @@ typedef struct ClientRequest {
 
 extern Thread *threads;
 extern int next_thread;
+extern int total_active_count;  /* Total active count across all threads */
 
 void signal_setup(struct event_base * base, struct SignalEvent* signal_event);
 void start_threads(void);

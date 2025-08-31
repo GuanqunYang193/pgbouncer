@@ -1688,6 +1688,7 @@ static void full_resume(void)
 			threads[thread_id].pause_ready = false;
 			threads[thread_id].wait_close_ready = false;
 			threads[thread_id].partial_pause = false;
+			threads[thread_id].active_count = 0;
 			unlock_and_resume_thread(thread_id);
 		}
 	}
@@ -1707,6 +1708,7 @@ static bool admin_cmd_resume(PgSocket *admin, const char *arg)
 		if (cf_shutdown) {
 			return admin_error(admin, "pooler is shutting down");
 		} else if (cf_pause_mode != P_NONE) {
+			int tmp_mode = cf_pause_mode;  /* Store the current mode before resetting */
 			if (multithread_mode) {
 				/* Reset pause mode on all threads */
 				FOR_EACH_THREAD(thread_id) {
@@ -1715,11 +1717,15 @@ static bool admin_cmd_resume(PgSocket *admin, const char *arg)
 					threads[thread_id].pause_ready = false;  /* Reset pause ready flag */
 					threads[thread_id].wait_close_ready = false;  /* Reset wait_close ready flag */
 					threads[thread_id].partial_pause = false;  /* Reset partial pause flag */
+					threads[thread_id].active_count = 0;  /* Reset active count */
 					unlock_and_resume_thread(thread_id);
 				}
 				cf_pause_mode = P_NONE;
 			}
-			full_resume();
+			/* Call full_resume with the stored mode */
+			if (tmp_mode == P_SUSPEND) {
+				resume_all();  /* For SUSPEND, we need to resume the pooler */
+			}
 		} else {
 			return admin_error(admin, "pooler is not paused/suspended");
 		}

@@ -473,8 +473,18 @@ void per_loop_maint(void)
 		} else {
 			active_count = statlist_count(login_client_list_);
 		}
+		/* Store active count in thread structure for multithread coordination */
+		if (multithread_mode) {
+			int thread_id = get_current_thread_id(multithread_mode);
+			threads[thread_id].active_count = active_count;
+		}
 	/* fallthrough */
 	case P_PAUSE:
+		/* Store active count in thread structure for multithread coordination */
+		if (multithread_mode) {
+			int thread_id = get_current_thread_id(multithread_mode);
+			threads[thread_id].active_count = active_count;
+		}
 		if (!active_count) {
 			if (multithread_mode) {
 				int thread_id = get_current_thread_id(multithread_mode);
@@ -1078,16 +1088,20 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 static void multithread_main_thread_full_maint(evutil_socket_t sock, short flags, void *arg){
 	MULTITHREAD_VISIT(multithread_mode, &adns_lock, adns_zone_cache_maint(adns));
 	
-	/* Check if all threads are ready for pause */
+	/* Check if all threads are ready for pause or suspend */
 	bool any_pause_mode = false;
+	bool any_suspend_mode = false;
 	FOR_EACH_THREAD(thread_id) {
 		if (threads[thread_id].cf_pause_mode == P_PAUSE || 
 		    (threads[thread_id].cf_pause_mode == P_NONE && threads[thread_id].partial_pause)) {
 			any_pause_mode = true;
-			break;
+		}
+		if (threads[thread_id].cf_pause_mode == P_SUSPEND) {
+			any_suspend_mode = true;
 		}
 	}
 	
+	/* Handle PAUSE mode */
 	if (any_pause_mode) {
 		bool all_threads_ready = true;
 		FOR_EACH_THREAD(thread_id) {
@@ -1098,6 +1112,26 @@ static void multithread_main_thread_full_maint(evutil_socket_t sock, short flags
 		}
 		
 		if (all_threads_ready) {
+			/* All threads are ready, send admin response */
+			admin_pause_done();
+			
+			/* Reset flags */
+			FOR_EACH_THREAD(thread_id) {
+				threads[thread_id].pause_ready = false;
+			}
+		}
+	}
+	
+	/* Handle SUSPEND mode */
+	if (any_suspend_mode) {
+		/* Calculate total active count across all threads */
+		total_active_count = 0;
+		FOR_EACH_THREAD(thread_id) {
+			total_active_count += threads[thread_id].active_count;
+		}
+		
+		/* If total active count is 0, all threads are ready for suspend */
+		if (total_active_count == 0) {
 			/* All threads are ready, send admin response */
 			admin_pause_done();
 			
