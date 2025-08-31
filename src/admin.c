@@ -123,21 +123,6 @@ static void count_paused_db_cb(struct List *item, void *ctx) {
     *cnt += db->db_paused;
 }
 
-static void per_loop_pause_cb(struct List *item, void *ctx) {
-    PgPool *pool;
-    int *active_count;
-    
-    pool = container_of(item, PgPool, head);
-    active_count = (int *)ctx;
-    
-    if (pool->db->admin)
-        return;
-    
-    /* Count active server connections */
-    *active_count += statlist_count(&pool->active_server_list);
-    *active_count += statlist_count(&pool->tested_server_list);
-}
-
 static void find_admin_pool_cb(struct List *item, void *ctx) {
     PgPool *pool;
     PgPool **admin_pool_ptr;
@@ -2595,11 +2580,12 @@ bool admin_handle_client(PgSocket *admin, PktHdr *pkt)
  */
 bool admin_pre_login(PgSocket *client, const char *username)
 {
+	PgPool *admin_pool_local;
 	client->admin_user = false;
 	client->own_user = false;
 
 	/* Get the admin pool for this client's thread */
-	PgPool *admin_pool_local = NULL;
+	admin_pool_local = NULL;
 	if (multithread_mode) {
 		int thread_id = get_current_thread_id(multithread_mode);
 		thread_safe_statlist_iterate(&(threads[thread_id].pool_list), 
@@ -2768,7 +2754,6 @@ void admin_pause_done(void)
 	if (multithread_mode) {
 		FOR_EACH_THREAD(thread_id) {
 			/* Find the admin pool for this thread */
-			struct List *pool_item;
 			PgPool *pool;
 			
 			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), 
@@ -2840,7 +2825,6 @@ void admin_pause_done(void)
 	if (multithread_mode) {
 		bool all_admin_clients_gone = true;
 		FOR_EACH_THREAD(thread_id) {
-			struct List *pool_item;
 			PgPool *pool;
 			
 			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), 
@@ -2877,7 +2861,6 @@ void admin_wait_close_done(void)
 	if (multithread_mode) {
 		FOR_EACH_THREAD(thread_id) {
 			/* Find the admin pool for this thread */
-			struct List *pool_item;
 			PgPool *pool;
 			
 			thread_safe_statlist_iterate(&(threads[thread_id].pool_list), 

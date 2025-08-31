@@ -399,6 +399,7 @@ void per_loop_maint(void)
 	int thread_id;
 	void* pool_list_ptr;
 	struct StatList* login_client_list_;
+	int thread_pause_mode;
 	int active_count = 0;
 	int waiting_count = 0;
 	bool partial_pause = false;
@@ -458,7 +459,6 @@ void per_loop_maint(void)
 
 	login_client_list_ = GET_MULTITHREAD_LIST_PTR(login_client_list, thread_id);
 
-	int thread_pause_mode;
 	if (multithread_mode) {
 		int thread_id = get_current_thread_id(multithread_mode);
 		thread_pause_mode = threads[thread_id].cf_pause_mode;
@@ -1084,11 +1084,13 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 }
 
 static void multithread_main_thread_full_maint(evutil_socket_t sock, short flags, void *arg){
+	bool any_pause_mode = false;
+	bool any_suspend_mode = false;
+	bool all_wait_close_ready = true;
+	
 	MULTITHREAD_VISIT(multithread_mode, &adns_lock, adns_zone_cache_maint(adns));
 	
 	/* Check if all threads are ready for pause or suspend */
-	bool any_pause_mode = false;
-	bool any_suspend_mode = false;
 	FOR_EACH_THREAD(thread_id) {
 		if (threads[thread_id].cf_pause_mode == P_PAUSE || 
 		    (threads[thread_id].cf_pause_mode == P_NONE && threads[thread_id].partial_pause)) {
@@ -1135,7 +1137,6 @@ static void multithread_main_thread_full_maint(evutil_socket_t sock, short flags
 	}
 	
 	/* Check if all threads are ready for wait_close */
-	bool all_wait_close_ready = true;
 	FOR_EACH_THREAD(thread_id) {
 		if (!threads[thread_id].wait_close_ready) {
 			all_wait_close_ready = false;
