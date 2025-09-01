@@ -801,6 +801,10 @@ static void main_loop_once(void)
 	if (adns){
 		MULTITHREAD_VISIT(multithread_mode, &adns_lock, adns_per_loop(adns));
 	}
+	
+	if (multithread_mode) {
+		per_loop_admin_condition_maint();
+	}
 }
 
 static void takeover_part1(void)

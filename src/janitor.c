@@ -514,6 +514,78 @@ void per_loop_maint(void)
 	}
 }
 
+void per_loop_admin_condition_maint(void)
+{
+	bool any_pause_mode = false;
+	bool any_suspend_mode = false;
+	bool all_wait_close_ready = true;
+	
+	/* Check if all threads are ready for pause or suspend */
+	FOR_EACH_THREAD(thread_id) {
+		if (threads[thread_id].cf_pause_mode == P_PAUSE || 
+		    (threads[thread_id].cf_pause_mode == P_NONE && threads[thread_id].partial_pause)) {
+			any_pause_mode = true;
+		}
+		if (threads[thread_id].cf_pause_mode == P_SUSPEND) {
+			any_suspend_mode = true;
+		}
+	}
+	
+	/* Handle PAUSE mode */
+	if (any_pause_mode) {
+		bool all_threads_ready = true;
+		FOR_EACH_THREAD(thread_id) {
+			if (!threads[thread_id].pause_ready) {
+				all_threads_ready = false;
+				break;
+			}
+		}
+		
+		if (all_threads_ready) {
+			/* All threads are ready, send admin response */
+			admin_pause_done();
+			
+			/* Reset flags */
+			FOR_EACH_THREAD(thread_id) {
+				threads[thread_id].pause_ready = false;
+			}
+		}
+	}
+	
+	/* Handle SUSPEND mode */
+	if (any_suspend_mode) {
+		/* If total active count is 0, all threads are ready for suspend */
+		if (total_active_count == 0) {
+			/* All threads are ready, send admin response */
+			admin_pause_done();
+			
+			/* Reset flags */
+			FOR_EACH_THREAD(thread_id) {
+				threads[thread_id].pause_ready = false;
+			}
+		}
+	}
+	
+	/* Check if all threads are ready for wait_close */
+	FOR_EACH_THREAD(thread_id) {
+		if (!threads[thread_id].wait_close_ready) {
+			all_wait_close_ready = false;
+			break;
+		}
+	}
+	
+	if (all_wait_close_ready) {
+		/* All threads are ready, send admin response */
+		admin_wait_close_done();
+		
+		/* Reset flags */
+		FOR_EACH_THREAD(thread_id) {
+			threads[thread_id].wait_close_ready = false;
+		}
+	}
+}
+
+
 /* maintaining clients in pool */
 static void pool_client_maint(PgPool *pool)
 {
@@ -1084,75 +1156,7 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 }
 
 static void multithread_main_thread_full_maint(evutil_socket_t sock, short flags, void *arg){
-	bool any_pause_mode = false;
-	bool any_suspend_mode = false;
-	bool all_wait_close_ready = true;
-	
 	MULTITHREAD_VISIT(multithread_mode, &adns_lock, adns_zone_cache_maint(adns));
-	
-	/* Check if all threads are ready for pause or suspend */
-	FOR_EACH_THREAD(thread_id) {
-		if (threads[thread_id].cf_pause_mode == P_PAUSE || 
-		    (threads[thread_id].cf_pause_mode == P_NONE && threads[thread_id].partial_pause)) {
-			any_pause_mode = true;
-		}
-		if (threads[thread_id].cf_pause_mode == P_SUSPEND) {
-			any_suspend_mode = true;
-		}
-	}
-	
-	/* Handle PAUSE mode */
-	if (any_pause_mode) {
-		bool all_threads_ready = true;
-		FOR_EACH_THREAD(thread_id) {
-			if (!threads[thread_id].pause_ready) {
-				all_threads_ready = false;
-				break;
-			}
-		}
-		
-		if (all_threads_ready) {
-			/* All threads are ready, send admin response */
-			admin_pause_done();
-			
-			/* Reset flags */
-			FOR_EACH_THREAD(thread_id) {
-				threads[thread_id].pause_ready = false;
-			}
-		}
-	}
-	
-	/* Handle SUSPEND mode */
-	if (any_suspend_mode) {
-		/* If total active count is 0, all threads are ready for suspend */
-		if (total_active_count == 0) {
-			/* All threads are ready, send admin response */
-			admin_pause_done();
-			
-			/* Reset flags */
-			FOR_EACH_THREAD(thread_id) {
-				threads[thread_id].pause_ready = false;
-			}
-		}
-	}
-	
-	/* Check if all threads are ready for wait_close */
-	FOR_EACH_THREAD(thread_id) {
-		if (!threads[thread_id].wait_close_ready) {
-			all_wait_close_ready = false;
-			break;
-		}
-	}
-	
-	if (all_wait_close_ready) {
-		/* All threads are ready, send admin response */
-		admin_wait_close_done();
-		
-		/* Reset flags */
-		FOR_EACH_THREAD(thread_id) {
-			threads[thread_id].wait_close_ready = false;
-		}
-	}
 	
 	FOR_EACH_THREAD(thread_id){
 		if(threads[thread_id].cf_shutdown != SHUTDOWN_IMMEDIATE){
