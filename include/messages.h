@@ -51,10 +51,10 @@ PreparedStatementAction inspect_parse_packet(PgSocket *client, PktHdr *pkt);
 PreparedStatementAction inspect_bind_packet(PgSocket *client, PktHdr *pkt);
 PreparedStatementAction inspect_describe_or_close_packet(PgSocket *client, PktHdr *pkt);
 
-bool unmarshall_parse_packet(PgSocket *client, PktHdr *pkt, PgParsePacket *parse_packet_p);
-bool unmarshall_bind_packet(PgSocket *client, PktHdr *pkt, PgBindPacket *bind_packet_p);
-bool unmarshall_describe_packet(PgSocket *client, PktHdr *pkt, PgDescribePacket *describe_packet_p);
-bool unmarshall_close_packet(PgSocket *client, PktHdr *pkt, PgClosePacket *close_packet_p);
+bool unmarshall_parse_packet(PgSocket *client, PktHdr *pkt, PgParsePacket *parse_packet_p, int thread_id);
+bool unmarshall_bind_packet(PgSocket *client, PktHdr *pkt, PgBindPacket *bind_packet_p, int thread_id);
+bool unmarshall_describe_packet(PgSocket *client, PktHdr *pkt, PgDescribePacket *describe_packet_p, int thread_id);
+bool unmarshall_close_packet(PgSocket *client, PktHdr *pkt, PgClosePacket *close_packet_p, int thread_id);
 
 bool is_close_named_statement_packet(PgClosePacket *close_packet);
 

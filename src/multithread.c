@@ -392,6 +392,7 @@ void* worker_func(void* arg)
     }
 
     pthread_setspecific(event_base_key, base);
+	this_thread->base = base;
 
     thread_pooler_setup();
 	worker_signal_setup(base, this_thread->thread_id);
@@ -417,7 +418,7 @@ void* worker_func(void* arg)
                 log_warning("event_loop failed: %s", strerror(errno));
         }
         per_loop_maint();
-        reuse_just_freed_objects();
+        reuse_just_freed_objects(this_thread->thread_id);
         rescue_timers();
         per_loop_pooler_maint();
     }
@@ -549,15 +550,6 @@ inline int get_current_thread_id(const bool multithread_mode){
 	}                                          
 	this_thread = (Thread*) pthread_getspecific(thread_pointer);
 	return this_thread->thread_id;      
-}
-
-usec_t get_multithread_time(void){
-	int thread_id;
-	if(!multithread_mode){
-		return get_cached_time();
-	}
-	thread_id = get_current_thread_id(multithread_mode);
-	return get_cached_time_from_ptr(&threads[thread_id].multithread_time_cache);
 }
 
 usec_t get_multithread_time_with_id(int thread_id){

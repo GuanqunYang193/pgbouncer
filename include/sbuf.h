@@ -53,7 +53,8 @@ typedef struct SBufIO SBufIO;
    next event loop (eg. too few data available). */
 typedef bool (*sbuf_cb_t)(SBuf *sbuf,
 			  SBufEvent evtype,
-			  struct MBuf *mbuf);
+			  struct MBuf *mbuf, 
+			  int thread_id);
 
 struct SBufIO {
 	ssize_t (*sbufio_peek)(SBuf *sbuf, void *buf, size_t len);
@@ -91,6 +92,8 @@ struct SBuf {
 	const SBufIO *ops;	/* normal vs. TLS */
 	struct tls *tls;	/* TLS context */
 	const char *tls_host;	/* target hostname */
+
+	int thread_id;	/* thread handling this SBuf */
 };
 
 #define sbuf_socket(sbuf) ((sbuf)->sock)

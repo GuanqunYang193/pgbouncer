@@ -35,9 +35,9 @@ typedef struct PgServerPreparedStatement {
 	(connection_pool_mode(client_or_server) != POOL_SESSION && cf_max_prepared_statements != 0)
 
 
-bool handle_parse_command(PgSocket *client, PktHdr *pkt);
-bool handle_bind_command(PgSocket *client, PktHdr *pkt);
-bool handle_describe_command(PgSocket *client, PktHdr *pkt);
+bool handle_parse_command(PgSocket *client, PktHdr *pkt, int thread_id);
+bool handle_bind_command(PgSocket *client, PktHdr *pkt, int thread_id);
+bool handle_describe_command(PgSocket *client, PktHdr *pkt, int thread_id);
 bool handle_close_statement_command(PgSocket *client, PktHdr *pkt, PgClosePacket *close_packet);
 
 void free_server_prepared_statement(PgServerPreparedStatement *server_ps);

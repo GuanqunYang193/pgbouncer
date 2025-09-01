@@ -323,7 +323,7 @@ static bool register_prepared_statement(PgSocket *client, PgSocket *server, PgSe
  * anything to the server but instead reuse that one. Otherwise we prepare it on
  * the server and add it to the server's hash of prepared statements.
  */
-bool handle_parse_command(PgSocket *client, PktHdr *pkt)
+bool handle_parse_command(PgSocket *client, PktHdr *pkt, int thread_id)
 {
 	PgSocket *server = client->link;
 	PgParsePacket pp;
@@ -335,7 +335,7 @@ bool handle_parse_command(PgSocket *client, PktHdr *pkt)
 
 	Assert(server);
 
-	if (!unmarshall_parse_packet(client, pkt, &pp))
+	if (!unmarshall_parse_packet(client, pkt, &pp, thread_id))
 		return false;
 
 	HASH_FIND_STR(client->client_prepared_statements, pp.name, client_ps);
@@ -351,7 +351,7 @@ bool handle_parse_command(PgSocket *client, PktHdr *pkt)
 		 * most clients anyway, since they will only issue Parse for
 		 * with currently unused names.
 		 */
-		disconnect_client(client, true, "prepared statement name is already in use");
+		disconnect_client(client, true, thread_id, "prepared statement name is already in use");
 		return false;
 	}
 
@@ -423,13 +423,13 @@ success:
 oom:
 	free(client_ps);
 	free_server_prepared_statement(server_ps);
-	disconnect_client(client, true, "out of memory");
+	disconnect_client(client, true, thread_id, "out of memory");
 	/*
 	 * We also disconnect the server, because we probably messed with its state
 	 * at this prepared statement state at this point. And rolling that back is
 	 * hard.
 	 */
-	disconnect_server(client->link, true, "out of memory");
+	disconnect_server(client->link, true, thread_id, "out of memory");
 	return false;
 }
 
@@ -438,7 +438,7 @@ oom:
  * and closes the client connection if no prepared statement with this name
  * could not be found.
  */
-static PgClientPreparedStatement *get_client_prepared_statement(PgSocket *client, const char *name)
+static PgClientPreparedStatement *get_client_prepared_statement(PgSocket *client, const char *name, int thread_id)
 {
 	PgClientPreparedStatement *client_ps;
 	HASH_FIND_STR(client->client_prepared_statements, name, client_ps);
@@ -454,7 +454,7 @@ static PgClientPreparedStatement *get_client_prepared_statement(PgSocket *client
 		 * most clients anyway, since they will only issue
 		 * Bind/Describe for prepared statements that actually exist.
 		 */
-		disconnect_client(client, true, "prepared statement did not exist");
+		disconnect_client(client, true, thread_id, "prepared statement did not exist");
 	}
 	return client_ps;
 }
@@ -529,7 +529,7 @@ static bool ensure_statement_is_prepared_on_server(PgSocket *server, PgPreparedS
  * then we first send a Parse command to the server for the prepared statement
  * in question.
  */
-bool handle_bind_command(PgSocket *client, PktHdr *pkt)
+bool handle_bind_command(PgSocket *client, PktHdr *pkt, int thread_id)
 {
 	PgSocket *server = client->link;
 	PgBindPacket bp;
@@ -540,13 +540,13 @@ bool handle_bind_command(PgSocket *client, PktHdr *pkt)
 
 	Assert(server);
 
-	if (!unmarshall_bind_packet(client, pkt, &bp))
+	if (!unmarshall_bind_packet(client, pkt, &bp, thread_id))
 		return false;
 
 	/* update stats */
 	client->pool->stats.ps_bind_count++;
 
-	client_ps = get_client_prepared_statement(client, bp.name);
+	client_ps = get_client_prepared_statement(client, bp.name, thread_id);
 	if (!client_ps)
 		return false;
 	ps = client_ps->ps;
@@ -618,13 +618,13 @@ bool handle_bind_command(PgSocket *client, PktHdr *pkt)
 	return true;
 
 oom:
-	disconnect_client(client, true, "out of memory");
+	disconnect_client(client, true, thread_id, "out of memory");
 	/*
 	 * We also disconnect the server, because we probably messed with its state
 	 * at this prepared statement state at this point. And rolling that back is
 	 * hard.
 	 */
-	disconnect_server(client->link, true, "out of memory");
+	disconnect_server(client->link, true, thread_id, "out of memory");
 	return false;
 }
 
@@ -636,7 +636,7 @@ oom:
  * server, then we first send a Parse command to the server for the prepared
  * statement in question.
  */
-bool handle_describe_command(PgSocket *client, PktHdr *pkt)
+bool handle_describe_command(PgSocket *client, PktHdr *pkt, int thread_id)
 {
 	PgSocket *server = client->link;
 	PgDescribePacket dp;
@@ -646,10 +646,10 @@ bool handle_describe_command(PgSocket *client, PktHdr *pkt)
 
 	Assert(server);
 
-	if (!unmarshall_describe_packet(client, pkt, &dp) || dp.type != 'S')
+	if (!unmarshall_describe_packet(client, pkt, &dp, thread_id) || dp.type != 'S')
 		return false;
 
-	client_ps = get_client_prepared_statement(client, dp.name);
+	client_ps = get_client_prepared_statement(client, dp.name, thread_id);
 	if (!client_ps)
 		return false;
 	ps = client_ps->ps;
@@ -671,13 +671,13 @@ bool handle_describe_command(PgSocket *client, PktHdr *pkt)
 	QUEUE_DescribeStmt(res, client, server, ps->stmt_name);
 	return res;
 oom:
-	disconnect_client(client, true, "out of memory");
+	disconnect_client(client, true, thread_id, "out of memory");
 	/*
 	 * We also disconnect the server, because we probably messed with its state
 	 * at this prepared statement state at this point. And rolling that back is
 	 * hard.
 	 */
-	disconnect_server(client->link, true, "out of memory");
+	disconnect_server(client->link, true, thread_id, "out of memory");
 	return false;
 }
 

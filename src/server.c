@@ -28,11 +28,10 @@
 
 #define ERRCODE_CANNOT_CONNECT_NOW "57P03"
 
-static bool load_parameter(PgSocket *server, PktHdr *pkt, bool startup)
+static bool load_parameter(PgSocket *server, PktHdr *pkt, bool startup, int thread_id)
 {
 	const char *key, *val;
 	PgSocket *client = server->link;
-	int thread_id = get_current_thread_id(multithread_mode);
 
 	/*
 	 * Want to see complete packet.  That means SMALL_PKT
@@ -61,10 +60,10 @@ static bool load_parameter(PgSocket *server, PktHdr *pkt, bool startup)
 
 	return true;
 failed:
-	disconnect_server(server, true, "broken ParameterStatus packet");
+	disconnect_server(server, true, thread_id, "broken ParameterStatus packet");
 	return false;
 failed_store:
-	disconnect_server(server, true, "failed to store ParameterStatus");
+	disconnect_server(server, true, thread_id, "failed to store ParameterStatus");
 	return false;
 }
 
@@ -73,7 +72,7 @@ failed_store:
  * server connections, we disconnect all other clients in the pool that are
  * waiting for a server.
  */
-void kill_pool_logins(PgPool *pool, const char *sqlstate, const char *msg)
+void kill_pool_logins(PgPool *pool, const char *sqlstate, const char *msg, int thread_id)
 {
 	struct List *item, *tmp;
 	PgSocket *client;
@@ -89,7 +88,7 @@ void kill_pool_logins(PgPool *pool, const char *sqlstate, const char *msg)
 
 	statlist_for_each_safe(item, &pool->waiting_client_list, tmp) {
 		client = container_of(item, PgSocket, head);
-		disconnect_client_sqlstate(client, true, sqlstate, msg);
+		disconnect_client_sqlstate(client, true, sqlstate, thread_id, msg );
 	}
 }
 
@@ -99,7 +98,7 @@ void kill_pool_logins(PgPool *pool, const char *sqlstate, const char *msg)
  * also waiting for a server. We disconnect them with exactly the same error
  * message and code as we received from the server.
  */
-const char * kill_pool_logins_server_error(PgPool *pool, PktHdr *errpkt)
+const char * kill_pool_logins_server_error(PgPool *pool, PktHdr *errpkt, int thread_id)
 {
 	const char *level, *sqlstate, *msg;
 
@@ -112,13 +111,13 @@ const char * kill_pool_logins_server_error(PgPool *pool, PktHdr *errpkt)
 	 */
 	if (strcmp(sqlstate, ERRCODE_CANNOT_CONNECT_NOW) != 0) {
 		log_noise("kill_pool_logins_server_error: sqlstate: %s", sqlstate);
-		kill_pool_logins(pool, sqlstate, msg);
+		kill_pool_logins(pool, sqlstate, msg, thread_id);
 	}
 	return msg;
 }
 
 /* process packets on server auth phase */
-static bool handle_server_startup(PgSocket *server, PktHdr *pkt)
+static bool handle_server_startup(PgSocket *server, PktHdr *pkt, int thread_id)
 {
 	SBuf *sbuf = &server->sbuf;
 	const char *msg;
@@ -126,7 +125,7 @@ static bool handle_server_startup(PgSocket *server, PktHdr *pkt)
 	const uint8_t *ckey;
 
 	if (incomplete_pkt(pkt)) {
-		disconnect_server(server, true, "partial pkt in login phase");
+		disconnect_server(server, true, thread_id, "partial pkt in login phase");
 		return false;
 	}
 
@@ -151,7 +150,7 @@ static bool handle_server_startup(PgSocket *server, PktHdr *pkt)
 	switch (pkt->type) {
 	default:
 		slog_error(server, "unknown pkt from server: '%c'", pkt_desc(pkt));
-		disconnect_server(server, true, "unknown pkt from server");
+		disconnect_server(server, true, thread_id, "unknown pkt from server");
 		break;
 
 	case PqMsg_ErrorResponse:
@@ -171,11 +170,11 @@ static bool handle_server_startup(PgSocket *server, PktHdr *pkt)
 		 * normal connection to report this problem.
 		 */
 		if (!server->replication) {
-			msg = kill_pool_logins_server_error(server->pool, pkt);
-			disconnect_server(server, true, "%s", (char *)msg);
+			msg = kill_pool_logins_server_error(server->pool, pkt, thread_id);
+			disconnect_server(server, true, thread_id, "%s", (char *)msg);
 		} else {
 			log_server_error("S: login failed", pkt);
-			disconnect_server(server, true, "login failed");
+			disconnect_server(server, true, thread_id, "login failed");
 		}
 		break;
 
@@ -183,13 +182,13 @@ static bool handle_server_startup(PgSocket *server, PktHdr *pkt)
 
 	case PqMsg_AuthenticationRequest:
 		slog_debug(server, "calling login_answer");
-		res = answer_authreq(server, pkt);
+		res = answer_authreq(server, pkt, thread_id);
 		if (!res)
-			disconnect_server(server, false, "failed to answer authreq");
+			disconnect_server(server, false, thread_id, "failed to answer authreq");
 		break;
 
 	case PqMsg_ParameterStatus:
-		res = load_parameter(server, pkt, true);
+		res = load_parameter(server, pkt, true, thread_id);
 		break;
 
 	case PqMsg_ReadyForQuery:
@@ -201,7 +200,7 @@ static bool handle_server_startup(PgSocket *server, PktHdr *pkt)
 			slog_debug(server, "server connect ok, send exec_on_connect");
 			SEND_generic(res, server, PqMsg_Query, "s", server->pool->db->connect_query);
 			if (!res)
-				disconnect_server(server, false, "exec_on_connect query failed");
+				disconnect_server(server, false, thread_id, "exec_on_connect query failed");
 			break;
 		}
 
@@ -213,7 +212,7 @@ static bool handle_server_startup(PgSocket *server, PktHdr *pkt)
 		finish_welcome_msg(server);
 
 		/* need to notify sbuf if server was closed */
-		res = release_server(server);
+		res = release_server(server, thread_id);
 
 		/* let the takeover process handle it */
 		if (res && server->pool->db->admin)
@@ -224,7 +223,7 @@ static bool handle_server_startup(PgSocket *server, PktHdr *pkt)
 
 	case PqMsg_BackendKeyData:
 		if (!mbuf_get_bytes(&pkt->data, BACKENDKEY_LEN, &ckey)) {
-			disconnect_server(server, true, "bad cancel key");
+			disconnect_server(server, true, thread_id, "bad cancel key");
 			return false;
 		}
 		memcpy(server->cancel_key, ckey, BACKENDKEY_LEN);
@@ -355,7 +354,7 @@ int user_client_max_connections(PgGlobalUser *user)
 }
 
 /* process packets on logged in connection */
-static bool handle_server_work(PgSocket *server, PktHdr *pkt)
+static bool handle_server_work(PgSocket *server, PktHdr *pkt, int thread_id)
 {
 	bool ready = false;
 	bool idle_tx = false;
@@ -370,7 +369,6 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 	Assert(!server->pool->db->admin);
 	
 	if(multithread_mode){
-		int thread_id = get_current_thread_id(multithread_mode);
 		outstanding_request_cache_ = threads[thread_id].outstanding_request_cache;
 	} else {
 		outstanding_request_cache_ = outstanding_request_cache;
@@ -379,7 +377,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 	switch (pkt->type) {
 	default:
 		slog_error(server, "unknown pkt: '%c'", pkt_desc(pkt));
-		disconnect_server(server, true, "unknown pkt");
+		disconnect_server(server, true, thread_id, "unknown pkt");
 		return false;
 
 	/* pooling decisions will be based on this packet */
@@ -391,7 +389,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 
 		if (!pop_outstanding_request(server, (char[]) {PqMsg_Sync, PqMsg_Query, PqMsg_FunctionCall, '\0'}, &ignore_packet)
 		    && server->query_failed) {
-			if (!clear_outstanding_requests_until(server, (char[]) {PqMsg_Sync, '\0'}))
+			if (!clear_outstanding_requests_until(server, (char[]) {PqMsg_Sync, '\0'}, thread_id))
 				return false;
 		}
 		server->query_failed = false;
@@ -400,7 +398,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 		if (state == 'I') {
 			ready = true;
 		} else if (connection_pool_mode(server) == POOL_STMT) {
-			disconnect_server(server, true, "transaction blocks not allowed in statement pooling mode");
+			disconnect_server(server, true, thread_id, "transaction blocks not allowed in statement pooling mode");
 			return false;
 		} else if (state == 'T' || state == 'E') {
 			idle_tx = true;
@@ -408,7 +406,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 		break;
 
 	case PqMsg_ParameterStatus:
-		if (!load_parameter(server, pkt, false))
+		if (!load_parameter(server, pkt, false, thread_id))
 			return false;
 		break;
 
@@ -435,7 +433,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 			 *
 			 * no reason to keep such guys.
 			 */
-			disconnect_server(server, true, "invalid server parameter");
+			disconnect_server(server, true, thread_id, "invalid server parameter");
 			return false;
 		}
 
@@ -463,7 +461,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 			 * COPY for some reason unknown to the client (e.g. a
 			 * unique constraint violation).
 			 */
-			if (!clear_outstanding_requests_until(server, (char[]) {PqMsg_CopyDone, PqMsg_CopyFail, '\0'}))
+			if (!clear_outstanding_requests_until(server, (char[]) {PqMsg_CopyDone, PqMsg_CopyFail, '\0'}, thread_id))
 				return false;
 		}
 
@@ -482,7 +480,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 			 * outstanding requests queue, for which we don't
 			 * expect a response from the server.
 			 */
-			if (!clear_outstanding_requests_until(server, (char[]) {PqMsg_CopyDone, '\0'}))
+			if (!clear_outstanding_requests_until(server, (char[]) {PqMsg_CopyDone, '\0'}, thread_id))
 				return false;
 		}
 		/*
@@ -591,7 +589,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 				if (ready || idle_tx) {
 					if (client->query_start) {
 						usec_t total;
-						total = get_multithread_time() - client->query_start;
+						total = get_multithread_time_with_id(thread_id) - client->query_start;
 						client->query_start = 0;
 						server->pool->stats.query_time += total;
 						slog_debug(client, "query time: %d us", (int)total);
@@ -605,7 +603,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 				if (ready) {
 					if (client->xact_start) {
 						usec_t total;
-						total = get_multithread_time() - client->xact_start;
+						total = get_multithread_time_with_id(thread_id) - client->xact_start;
 						client->xact_start = 0;
 						server->pool->stats.xact_time += total;
 						slog_debug(client, "transaction time: %d us", (int)total);
@@ -634,8 +632,8 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 					 * correct way out: Simply disconnecting the involved
 					 * client and server.
 					 */
-					disconnect_client(client, true, "out of memory");
-					disconnect_server(client->link, true, "out of memory");
+					disconnect_client(client, true, thread_id,"out of memory");
+					disconnect_server(client->link, true, thread_id,"out of memory");
 					return false;
 				}
 				slab_free(outstanding_request_cache_, request);
@@ -654,7 +652,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 }
 
 /* got connection, decide what to do */
-static bool handle_connect(PgSocket *server)
+static bool handle_connect(PgSocket *server, int thread_id)
 {
 	bool res = false;
 	PgPool *pool = server->pool;
@@ -687,18 +685,18 @@ static bool handle_connect(PgSocket *server)
 	 */
 	if (!statlist_empty(&pool->waiting_cancel_req_list)) {
 		slog_debug(server, "use it for pending cancel req");
-		if (forward_cancel_request(server)) {
-			change_server_state(server, SV_ACTIVE_CANCEL);
+		if (forward_cancel_request(server, thread_id)) {
+			change_server_state(server, SV_ACTIVE_CANCEL, thread_id);
 			sbuf_continue(&server->sbuf);
 		} else {
 			/* notify disconnect_server() that connect did not fail */
 			server->ready = true;
-			disconnect_server(server, false, "failed to send cancel req");
+			disconnect_server(server, false, thread_id, "failed to send cancel req");
 		}
 	} else if (pool->db->peer_id) {
 		/* notify disconnect_server() that connect did not fail */
 		server->ready = true;
-		disconnect_server(server, false, "peer server was not necessary anymore, because client cancel connection was already closed");
+		disconnect_server(server, false, thread_id, "peer server was not necessary anymore, because client cancel connection was already closed");
 	} else {
 		/* proceed with login */
 		if (server_connect_sslmode > SSLMODE_DISABLED && !is_unix) {
@@ -711,12 +709,12 @@ static bool handle_connect(PgSocket *server)
 			res = send_startup_packet(server);
 		}
 		if (!res)
-			disconnect_server(server, false, "startup pkt failed");
+			disconnect_server(server, false, thread_id, "startup pkt failed");
 	}
 	return res;
 }
 
-static bool handle_sslchar(PgSocket *server, struct MBuf *data)
+static bool handle_sslchar(PgSocket *server, struct MBuf *data, int thread_id)
 {
 	uint8_t schar = '?';
 	bool ok;
@@ -725,7 +723,7 @@ static bool handle_sslchar(PgSocket *server, struct MBuf *data)
 
 	ok = mbuf_get_byte(data, &schar);
 	if (!ok || (schar != 'S' && schar != 'N')) {
-		disconnect_server(server, false, "bad sslreq answer");
+		disconnect_server(server, false, thread_id,"bad sslreq answer");
 		return false;
 	}
 	/*
@@ -735,7 +733,7 @@ static bool handle_sslchar(PgSocket *server, struct MBuf *data)
 	 * injected by a man-in-the-middle.
 	 */
 	if (mbuf_avail_for_read(data) != 0) {
-		disconnect_server(server, false, "received unencrypted data after SSL response");
+		disconnect_server(server, false, thread_id,"received unencrypted data after SSL response");
 		return false;
 	}
 
@@ -743,7 +741,7 @@ static bool handle_sslchar(PgSocket *server, struct MBuf *data)
 		slog_noise(server, "launching tls");
 		ok = sbuf_tls_connect(&server->sbuf, server->host);
 	} else if (server_connect_sslmode >= SSLMODE_REQUIRE) {
-		disconnect_server(server, false, "server refused SSL");
+		disconnect_server(server, false, thread_id,"server refused SSL");
 		return false;
 	} else {
 		/* proceed with non-TLS connection */
@@ -753,13 +751,13 @@ static bool handle_sslchar(PgSocket *server, struct MBuf *data)
 	if (ok) {
 		sbuf_prepare_skip(&server->sbuf, 1);
 	} else {
-		disconnect_server(server, false, "sslreq processing failed");
+		disconnect_server(server, false, thread_id,"sslreq processing failed");
 	}
 	return ok;
 }
 
 /* callback from SBuf */
-bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
+bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data, int thread_id)
 {
 	bool res = false;
 	PgSocket *server = container_of(sbuf, PgSocket, sbuf);
@@ -777,16 +775,16 @@ bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 	switch (evtype) {
 	case SBUF_EV_RECV_FAILED:
 		if (server->state == SV_ACTIVE_CANCEL)
-			disconnect_server(server, false, "successfully sent cancel request");
+			disconnect_server(server, false, thread_id, "successfully sent cancel request");
 		else
-			disconnect_server(server, false, "server conn crashed?");
+			disconnect_server(server, false, thread_id, "server conn crashed?");
 		break;
 	case SBUF_EV_SEND_FAILED:
-		disconnect_client(server->link, false, "unexpected eof");
+		disconnect_client(server->link, false, thread_id, "unexpected eof");
 		break;
 	case SBUF_EV_READ:
 		if (server->wait_sslchar) {
-			res = handle_sslchar(server, data);
+			res = handle_sslchar(server, data, thread_id);
 			break;
 		}
 		if (incomplete_header(data)) {
@@ -796,15 +794,15 @@ bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 
 		/* parse pkt header */
 		if (!get_header(data, &pkt)) {
-			disconnect_server(server, true, "bad pkt header");
+			disconnect_server(server, true, thread_id, "bad pkt header");
 			break;
 		}
 		slog_noise(server, "read pkt='%c', len=%u", pkt_desc(&pkt), pkt.len);
 
-		server->request_time = get_multithread_time();
+		server->request_time = get_multithread_time_with_id(thread_id);
 		switch (server->state) {
 		case SV_LOGIN:
-			res = handle_server_startup(server, &pkt);
+			res = handle_server_startup(server, &pkt, thread_id);
 			break;
 		case SV_TESTED:
 		case SV_USED:
@@ -812,7 +810,7 @@ bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 		case SV_ACTIVE_CANCEL:
 		case SV_BEING_CANCELED:
 		case SV_IDLE:
-			res = handle_server_work(server, &pkt);
+			res = handle_server_work(server, &pkt, thread_id);
 			break;
 		default:
 			fatal("server_proto: server in bad state: %d", server->state);
@@ -820,13 +818,13 @@ bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 		break;
 	case SBUF_EV_CONNECT_FAILED:
 		Assert(server->state == SV_LOGIN);
-		disconnect_server(server, false, "connect failed");
+		disconnect_server(server, false, thread_id, "connect failed");
 		break;
 	case SBUF_EV_CONNECT_OK:
 		slog_debug(server, "S: connect ok");
 		Assert(server->state == SV_LOGIN);
-		server->request_time = get_multithread_time();
-		res = handle_connect(server);
+		server->request_time = get_multithread_time_with_id(thread_id);
+		res = handle_connect(server, thread_id);
 		break;
 	case SBUF_EV_FLUSH:
 		res = true;
@@ -868,7 +866,7 @@ bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 				}
 
 				/* retval does not matter here */
-				release_server(server);
+				release_server(server, thread_id);
 				break;
 			default:
 				slog_warning(server, "EV_FLUSH with state=%d", server->state);
@@ -891,12 +889,12 @@ bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 			slog_noise(server, "SSL established: %s", infobuf);
 		}
 
-		server->request_time = get_multithread_time();
+		server->request_time = get_current_thread_id(thread_id);
 		res = send_startup_packet(server);
 		if (res)
 			sbuf_continue(&server->sbuf);
 		else
-			disconnect_server(server, false, "TLS startup failed");
+			disconnect_server(server, false, thread_id, "TLS startup failed");
 		break;
 	}
 	if (!res && pool->db->admin)

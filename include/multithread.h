@@ -90,6 +90,7 @@ typedef struct ThreadMetadata{
 typedef struct Thread {
     ThreadMetadata thread_metadata;
     pthread_t worker;
+    struct event_base *base;
     int thread_id;
     struct event full_maint_ev;
     struct event ev_stats;
@@ -173,7 +174,6 @@ void unlock_and_resume_thread(int thread_id);
 void set_thread_id(int thread_id);
 int get_current_thread_id(const bool multithread_mode);
 
-usec_t get_multithread_time(void);
 usec_t get_multithread_time_with_id(int thread_id);
 
 void multithread_reset_time_cache(void);

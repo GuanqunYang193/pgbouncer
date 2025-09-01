@@ -246,7 +246,7 @@ void finish_welcome_msg(PgSocket *server)
 	pool->welcome_msg_ready = true;
 }
 
-bool welcome_client(PgSocket *client)
+bool welcome_client(PgSocket *client, int thread_id)
 {
 	int res;
 	PgPool *pool = client->pool;
@@ -306,14 +306,14 @@ bool welcome_client(PgSocket *client)
 	/* finish */
 	pktbuf_write_ReadyForQuery(msg);
 	if (msg->failed) {
-		disconnect_client(client, true, "failed to prepare welcome message");
+		disconnect_client(client, true, thread_id, "failed to prepare welcome message");
 		return false;
 	}
 
 	/* send all together */
 	res = pktbuf_send_immediate(msg, client);
 	if (!res) {
-		disconnect_client(client, true, "failed to send welcome message");
+		disconnect_client(client, true, thread_id, "failed to send welcome message");
 		return false;
 	}
 	return true;
@@ -353,7 +353,7 @@ static bool login_clear_psw(PgSocket *server)
 	return send_password(server, credentials->passwd);
 }
 
-static bool login_md5_psw(PgSocket *server, const uint8_t *salt)
+static bool login_md5_psw(PgSocket *server, const uint8_t *salt, int thread_id)
 {
 	char txt[MD5_PASSWD_LEN + 1], *src;
 	PgCredentials *credentials = get_srv_psw(server);
@@ -371,7 +371,7 @@ static bool login_md5_psw(PgSocket *server, const uint8_t *salt)
 		break;
 	default:
 		slog_error(server, "cannot do MD5 authentication: wrong password type");
-		kill_pool_logins(server->pool, NULL, "server login failed: wrong password type");
+		kill_pool_logins(server->pool, NULL, "server login failed: wrong password type", thread_id);
 		return false;
 	}
 
@@ -381,7 +381,7 @@ static bool login_md5_psw(PgSocket *server, const uint8_t *salt)
 	return send_password(server, txt);
 }
 
-static bool login_scram_sha_256(PgSocket *server)
+static bool login_scram_sha_256(PgSocket *server, int thread_id)
 {
 	PgCredentials *credentials = get_srv_psw(server);
 	bool res;
@@ -394,13 +394,13 @@ static bool login_scram_sha_256(PgSocket *server)
 	case PASSWORD_TYPE_SCRAM_SHA_256:
 		if (!credentials->use_scram_keys) {
 			slog_error(server, "cannot do SCRAM authentication: password is SCRAM secret but client authentication did not provide SCRAM keys");
-			kill_pool_logins(server->pool, NULL, "server login failed: wrong password type");
+			kill_pool_logins(server->pool, NULL, "server login failed: wrong password type", thread_id);
 			return false;
 		}
 		break;
 	default:
 		slog_error(server, "cannot do SCRAM authentication: wrong password type");
-		kill_pool_logins(server->pool, NULL, "server login failed: wrong password type");
+		kill_pool_logins(server->pool, NULL, "server login failed: wrong password type", thread_id);
 		return false;
 	}
 
@@ -475,7 +475,7 @@ failed:
 	return false;
 }
 
-static bool login_scram_sha_256_final(PgSocket *server, unsigned datalen, const uint8_t *data)
+static bool login_scram_sha_256_final(PgSocket *server, unsigned datalen, const uint8_t *data, int thread_id)
 {
 	PgCredentials *credentials = get_srv_psw(server);
 	char *ibuf = NULL;
@@ -500,7 +500,7 @@ static bool login_scram_sha_256_final(PgSocket *server, unsigned datalen, const 
 
 	if (!verify_server_signature(&server->scram_state, credentials, ServerSignature)) {
 		slog_error(server, "invalid server signature");
-		kill_pool_logins(server->pool, NULL, "server login failed: invalid server signature");
+		kill_pool_logins(server->pool, NULL, "server login failed: invalid server signature", thread_id);
 		goto failed;
 	}
 
@@ -512,7 +512,7 @@ failed:
 }
 
 /* answer server authentication request */
-bool answer_authreq(PgSocket *server, PktHdr *pkt)
+bool answer_authreq(PgSocket *server, PktHdr *pkt, int thread_id)
 {
 	uint32_t cmd;
 	const uint8_t *salt;
@@ -537,7 +537,7 @@ bool answer_authreq(PgSocket *server, PktHdr *pkt)
 		slog_debug(server, "S: req md5-crypted psw");
 		if (!mbuf_get_bytes(&pkt->data, 4, &salt))
 			return false;
-		res = login_md5_psw(server, salt);
+		res = login_md5_psw(server, salt, thread_id);
 		break;
 	case AUTH_REQ_SASL:
 	{
@@ -559,9 +559,9 @@ bool answer_authreq(PgSocket *server, PktHdr *pkt)
 
 		if (!selected_mechanism) {
 			slog_error(server, "none of the server's SASL authentication mechanisms are supported");
-			kill_pool_logins(server->pool, NULL, "server login failed: none of the server's SASL authentication mechanisms are supported");
+			kill_pool_logins(server->pool, NULL, "server login failed: none of the server's SASL authentication mechanisms are supported", thread_id);
 		} else {
-			res = login_scram_sha_256(server);
+			res = login_scram_sha_256(server, thread_id);
 		}
 		break;
 	}
@@ -586,7 +586,7 @@ bool answer_authreq(PgSocket *server, PktHdr *pkt)
 		len = mbuf_avail_for_read(&pkt->data);
 		if (!mbuf_get_bytes(&pkt->data, len, &data))
 			return false;
-		res = login_scram_sha_256_final(server, len, data);
+		res = login_scram_sha_256_final(server, len, data, thread_id);
 		free_scram_state(&server->scram_state);
 		break;
 	}

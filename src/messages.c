@@ -71,7 +71,7 @@ PreparedStatementAction inspect_describe_or_close_packet(PgSocket *client, PktHd
  * the PktHdr should not be freed until the PgParsePacket is not necessary
  * anymore.
  */
-bool unmarshall_parse_packet(PgSocket *client, PktHdr *pkt, PgParsePacket *parse_packet)
+bool unmarshall_parse_packet(PgSocket *client, PktHdr *pkt, PgParsePacket *parse_packet, int thread_id)
 {
 	const char *statement;
 	const char *query;
@@ -106,7 +106,7 @@ bool unmarshall_parse_packet(PgSocket *client, PktHdr *pkt, PgParsePacket *parse
 	return true;
 
 failed:
-	disconnect_client(client, true, "broken Parse packet");
+	disconnect_client(client, true, thread_id, "broken Parse packet");
 	return false;
 }
 
@@ -117,7 +117,7 @@ failed:
  * the PktHdr should not be freed until the PgBindPacket is not necessary
  * anymore.
  */
-bool unmarshall_bind_packet(PgSocket *client, PktHdr *pkt, PgBindPacket *bind_packet)
+bool unmarshall_bind_packet(PgSocket *client, PktHdr *pkt, PgBindPacket *bind_packet, int thread_id)
 {
 	const char *portal;
 	const char *statement;
@@ -135,7 +135,7 @@ bool unmarshall_bind_packet(PgSocket *client, PktHdr *pkt, PgBindPacket *bind_pa
 	return true;
 
 failed:
-	disconnect_client(client, true, "broken Bind packet");
+	disconnect_client(client, true, thread_id, "broken Bind packet");
 	return false;
 }
 
@@ -146,7 +146,7 @@ failed:
  * the PktHdr should not be freed until the PgDescribePacket is not necessary
  * anymore.
  */
-bool unmarshall_describe_packet(PgSocket *client, PktHdr *pkt, PgDescribePacket *describe_packet)
+bool unmarshall_describe_packet(PgSocket *client, PktHdr *pkt, PgDescribePacket *describe_packet, int thread_id)
 {
 	char describe;
 	const char *statement;
@@ -166,7 +166,7 @@ bool unmarshall_describe_packet(PgSocket *client, PktHdr *pkt, PgDescribePacket 
 	return true;
 
 failed:
-	disconnect_client(client, true, "broken Describe packet");
+	disconnect_client(client, true, thread_id, "broken Describe packet");
 	return false;
 }
 
@@ -177,7 +177,7 @@ failed:
  * the PktHdr should not be freed until the PgClosePacket is not necessary
  * anymore.
  */
-bool unmarshall_close_packet(PgSocket *client, PktHdr *pkt, PgClosePacket *close_packet)
+bool unmarshall_close_packet(PgSocket *client, PktHdr *pkt, PgClosePacket *close_packet, int thread_id)
 {
 	char type;
 	const char *name;
@@ -198,7 +198,7 @@ bool unmarshall_close_packet(PgSocket *client, PktHdr *pkt, PgClosePacket *close
 	return true;
 
 failed:
-	disconnect_client(client, true, "broken Close packet");
+	disconnect_client(client, true, thread_id, "broken Close packet");
 	return false;
 }
 

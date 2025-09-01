@@ -120,7 +120,7 @@ static void calc_average(PgStats *avg, PgStats *cur, PgStats *old, usec_t curren
 static void write_stats(PktBuf *buf, PgStats *stat, PgStats *old, char *dbname, int thread_id)
 {
 	PgStats avg;
-	calc_average(&avg, stat, old, get_multithread_time());
+	calc_average(&avg, stat, old, get_multithread_time_with_id(thread_id));
 	if (multithread_mode) {
 		pktbuf_write_DataRow(buf, "sNNNNNNNNNNNNNNNNNNNNNNN", dbname, thread_id,
 				     stat->server_assignment_count,
@@ -320,7 +320,7 @@ bool admin_database_stats_totals(PgSocket *client)
 static void write_stats_averages(PktBuf *buf, PgStats *stat, PgStats *old, char *dbname, int thread_id)
 {
 	PgStats avg;
-	calc_average(&avg, stat, old, get_multithread_time());
+	calc_average(&avg, stat, old, get_multithread_time_with_id(thread_id));
 	if (multithread_mode) {
 		pktbuf_write_DataRow(buf, "sNNNNNNNNNNNN", dbname, thread_id,
 				     avg.server_assignment_count,
@@ -421,7 +421,7 @@ bool show_stat_totals(PgSocket *client)
 		}
 	}
 
-	calc_average(&avg, &st_total, &old_total, get_multithread_time());
+	calc_average(&avg, &st_total, &old_total, get_multithread_time_with_id(get_current_thread_id(multithread_mode)));
 
 	pktbuf_write_RowDescription(buf, "sN", "name", "value");
 

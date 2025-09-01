@@ -794,7 +794,7 @@ static void main_loop_once(void)
 		ldap_poll();
 		pam_poll();
 		per_loop_maint();
-		reuse_just_freed_objects();
+		reuse_just_freed_objects(-1);
 		rescue_timers();
 		per_loop_pooler_maint();
 	}

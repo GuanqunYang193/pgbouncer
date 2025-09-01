@@ -45,9 +45,9 @@ void parse_server_error(PktHdr *pkt, const char **level_p, const char **msg_p, c
 
 bool add_welcome_parameter(PgPool *pool, const char *key, const char *val, int thread_id) _MUSTCHECK;
 void finish_welcome_msg(PgSocket *server);
-bool welcome_client(PgSocket *client) _MUSTCHECK;
+bool welcome_client(PgSocket *client, int thread_id) _MUSTCHECK;
 
-bool answer_authreq(PgSocket *server, PktHdr *pkt) _MUSTCHECK;
+bool answer_authreq(PgSocket *server, PktHdr *pkt, int thread_id) _MUSTCHECK;
 
 bool send_startup_packet(PgSocket *server) _MUSTCHECK;
 bool send_sslreq_packet(PgSocket *server) _MUSTCHECK;

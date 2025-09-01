@@ -37,6 +37,7 @@
 
 static PgSocket *old_bouncer = NULL;
 
+// Not supported in multithread mode 
 void takeover_finish(void)
 {
 	uint8_t buf[512];
@@ -58,7 +59,7 @@ void takeover_finish(void)
 			die("sky is falling - error while waiting result from SHUTDOWN: %s", strerror(errno));
 	}
 
-	disconnect_server(old_bouncer, false, "disko over");
+	disconnect_server(old_bouncer, false, -1, "disko over");
 	old_bouncer = NULL;
 
 	if (cf_pidfile && cf_pidfile[0]) {
@@ -366,22 +367,20 @@ void takeover_init(void)
 {
 	PgDatabase *db;
 	PgPool *pool = NULL;
-	int thread_id = -1;
 	if(multithread_mode){
 		log_error("takeover_init: multithread mode not supported");
 		return;
 	}
 	
-	thread_id = get_current_thread_id(multithread_mode);
-	db = find_database("pgbouncer", thread_id);
+	db = find_database("pgbouncer", -1);
 	if (db)
-		pool = get_pool(db, db->forced_user_credentials, thread_id);
+		pool = get_pool(db, db->forced_user_credentials, -1);
 
 	if (!pool)
 		fatal("no admin pool?");
 
 	log_info("takeover_init: launching connection");
-	launch_new_connection(pool, /* evict_if_needed= */ true);
+	launch_new_connection(pool, /* evict_if_needed= */ true, -1);
 }
 
 void takeover_login_failed(void)

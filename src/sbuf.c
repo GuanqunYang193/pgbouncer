@@ -196,7 +196,7 @@ bool sbuf_connect(SBuf *sbuf, const struct sockaddr *sa, socklen_t sa_len, time_
 		/* tcp socket needs waiting */
 		struct event_base * base = pgb_event_base;
 		if(multithread_mode)
-			base = (struct event_base *)pthread_getspecific(event_base_key);
+			base = threads[sbuf->thread_id].base;
 		event_assign(&sbuf->ev, base, sock, EV_WRITE, sbuf_connect_cb, sbuf);
 		res = event_add(&sbuf->ev, &timeout);
 		if (res >= 0) {
@@ -271,7 +271,7 @@ bool sbuf_continue_with_callback(SBuf *sbuf, event_callback_fn user_cb)
 	AssertActive(sbuf);
 
 	if(multithread_mode)
-		base = (struct event_base *)pthread_getspecific(event_base_key);
+		base = threads[sbuf->thread_id].base;
 	event_assign(&sbuf->ev, base, sbuf->sock, EV_READ | EV_PERSIST,
 		     user_cb, sbuf);
 
@@ -518,7 +518,7 @@ static bool sbuf_call_proto(SBuf *sbuf, int event)
 	} else {
 		memset(&mbuf, 0, sizeof(mbuf));
 	}
-	res = sbuf->proto_cb(sbuf, event, &mbuf);
+	res = sbuf->proto_cb(sbuf, event, &mbuf, sbuf->thread_id);
 
 	AssertSanity(sbuf);
 	Assert(event != SBUF_EV_READ || !res || sbuf->sock > 0);
@@ -629,7 +629,7 @@ static bool sbuf_queue_send(SBuf *sbuf)
 
 	/* instead wait for EV_WRITE on destination socket */
 	if(multithread_mode)
-		base = (struct event_base *)pthread_getspecific(event_base_key);
+		base = threads[sbuf->thread_id].base;
 	event_assign(&sbuf->ev, base, sbuf->dst->sock, EV_WRITE, sbuf_send_cb, sbuf);
 	err = event_add(&sbuf->ev, NULL);
 	if (err < 0) {
@@ -1306,7 +1306,7 @@ static bool tls_change_requires_reconnect(struct tls_config *new_server_connect_
 
 static void tls_setup_cb(struct List *item, void *ctx) {
 	PgPool *pool = container_of(item, PgPool, head);
-	tag_pool_dirty(pool);
+	tag_pool_dirty(pool, *(int*)ctx);
 }
 
 bool sbuf_tls_setup(void)
@@ -1399,12 +1399,12 @@ bool sbuf_tls_setup(void)
 		PgPool *pool;
 		if(multithread_mode){
 			FOR_EACH_THREAD(thread_id){
-				thread_safe_statlist_iterate(&(threads[thread_id].pool_list), tls_setup_cb, NULL);
+				thread_safe_statlist_iterate(&(threads[thread_id].pool_list), tls_setup_cb, &thread_id);
 			}
 		}else{
 			statlist_for_each(item, &pool_list) {
 				pool = container_of(item, PgPool, head);
-				tag_pool_dirty(pool);
+				tag_pool_dirty(pool,-1);
 			}
 		}
 	}
@@ -1641,7 +1641,7 @@ static void sbuf_possible_direct_tls_startup_cb(evutil_socket_t fd, short flags,
 	 */
 	log_noise("Starting TLS handshake");
 	if (!sbuf_tls_accept(sbuf)) {
-		disconnect_client(client, false, "failed to accept SSL");
+		disconnect_client(client, false, sbuf->thread_id, "failed to accept SSL");
 		return;
 	}
 	sbuf->pkt_action = SBUF_TLS_IN_HANDSHAKE;

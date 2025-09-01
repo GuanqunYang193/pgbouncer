@@ -2068,21 +2068,18 @@ static bool admin_cmd_kill_client(PgSocket *admin, const char *arg)
 		return admin_error(admin, "client not found");
 	}
 
+	thread_id = get_current_thread_id(multithread_mode);
+
 	if (!multithread_mode) {
-		disconnect_client(kill_client.client, true, "admin forced disconnect");
+		disconnect_client(kill_client.client, true, thread_id, "admin forced disconnect");
 		return admin_ready(admin, "KILL_CLIENT");
 	}
 	
-	thread_id = get_current_thread_id(multithread_mode);
-
+	
 	lock_and_pause_thread(kill_client.thread_id);
-	// switch to target thread
-	set_thread_id(kill_client.thread_id);
 
-	disconnect_client(kill_client.client, true, "admin forced disconnect");
+	disconnect_client(kill_client.client, true, thread_id, "admin forced disconnect");
 
-	// restore current thread
-	set_thread_id(thread_id);
 	unlock_and_resume_thread(kill_client.thread_id);
 	return admin_ready(admin, "KILL_CLIENT");
 }
@@ -2482,7 +2479,7 @@ static struct cmd_lookup cmd_list [] = {
 };
 
 /* handle user query */
-static bool admin_parse_query(PgSocket *admin, const char *q)
+static bool admin_parse_query(PgSocket *admin, const char *q, int thread_id)
 {
 	regmatch_t grp[MAX_GROUPS];
 	char cmd[16];
@@ -2523,7 +2520,7 @@ static bool admin_parse_query(PgSocket *admin, const char *q)
 done:
 	current_query = NULL;
 	if (!res)
-		disconnect_client(admin, true, "failure");
+		disconnect_client(admin, true, thread_id, "failure");
 	return res;
 failed:
 	res = admin_error(admin, "bad arguments");
@@ -2531,30 +2528,30 @@ failed:
 }
 
 /* handle packets */
-bool admin_handle_client(PgSocket *admin, PktHdr *pkt)
+bool admin_handle_client(PgSocket *admin, PktHdr *pkt, int thread_id)
 {
 	const char *q;
 	bool res;
 
 	/* don't tolerate partial packets */
 	if (incomplete_pkt(pkt)) {
-		disconnect_client(admin, true, "incomplete pkt");
+		disconnect_client(admin, true, thread_id, "incomplete pkt");
 		return false;
 	}
 
 	switch (pkt->type) {
 	case PqMsg_Query:
 		if (!mbuf_get_string(&pkt->data, &q)) {
-			disconnect_client(admin, true, "incomplete query");
+			disconnect_client(admin, true, thread_id, "incomplete query");
 			return false;
 		}
 		log_debug("got admin query: %s", q);
-		res = admin_parse_query(admin, q);
+		res = admin_parse_query(admin, q, thread_id);
 		if (res)
 			sbuf_prepare_skip(&admin->sbuf, pkt->len);
 		return res;
 	case PqMsg_Terminate:
-		disconnect_client(admin, false, "close req");
+		disconnect_client(admin, false, thread_id, "close req");
 		break;
 	case PqMsg_Parse:
 	case PqMsg_Bind:
@@ -2564,11 +2561,11 @@ bool admin_handle_client(PgSocket *admin, PktHdr *pkt)
 		 * a more helpful error message in these cases.
 		 */
 		admin_error(admin, "extended query protocol not supported by admin console");
-		disconnect_client(admin, true, "bad packet");
+		disconnect_client(admin, true, thread_id, "bad packet");
 		break;
 	default:
 		admin_error(admin, "unsupported packet type for admin console: %d", pkt_desc(pkt));
-		disconnect_client(admin, true, "bad packet");
+		disconnect_client(admin, true, thread_id, "bad packet");
 		break;
 	}
 	return false;
@@ -2578,7 +2575,7 @@ bool admin_handle_client(PgSocket *admin, PktHdr *pkt)
  * Client is unauthenticated, look if it wants to connect
  * to special "pgbouncer" user.
  */
-bool admin_pre_login(PgSocket *client, const char *username)
+bool admin_pre_login(PgSocket *client, const char *username, int thread_id)
 {
 	PgPool *admin_pool_local;
 	client->admin_user = false;
@@ -2611,7 +2608,7 @@ bool admin_pre_login(PgSocket *client, const char *username)
 			client->login_user_credentials = admin_pool_local->db->forced_user_credentials;
 			client->own_user = true;
 			client->admin_user = true;
-			if (!check_db_connection_count(client))
+			if (!check_db_connection_count(client, thread_id))
 				return false;
 			if (cf_log_connections)
 				slog_info(client, "pgbouncer access from unix socket");
@@ -2627,15 +2624,15 @@ bool admin_pre_login(PgSocket *client, const char *username)
 		if (strlist_contains(cf_admin_users, username)) {
 			client->login_user_credentials = admin_pool_local->db->forced_user_credentials;
 			client->admin_user = true;
-			if (!check_db_connection_count(client))
+			if (!check_db_connection_count(client, thread_id))
 				return false;
 			return true;
 		} else if (strlist_contains(cf_stats_users, username)) {
 			client->login_user_credentials = admin_pool_local->db->forced_user_credentials;
-			if (!check_db_connection_count(client))
+			if (!check_db_connection_count(client, thread_id))
 				return false;
 
-			if (!check_user_connection_count(client))
+			if (!check_user_connection_count(client, thread_id))
 				return false;
 
 			return true;
@@ -2644,7 +2641,7 @@ bool admin_pre_login(PgSocket *client, const char *username)
 	return false;
 }
 
-bool admin_post_login(PgSocket *client)
+bool admin_post_login(PgSocket *client, int thread_id)
 {
 	const char *username = client->login_user_credentials->name;
 
@@ -2658,7 +2655,7 @@ bool admin_post_login(PgSocket *client)
 		return true;
 	}
 
-	disconnect_client(client, true, "not allowed");
+	disconnect_client(client, true, thread_id, "not allowed");
 	return false;
 }
 
@@ -2784,7 +2781,7 @@ void admin_pause_done(void)
 					}
 
 					if (!res)
-						disconnect_client(admin, false, "dead admin");
+						disconnect_client(admin, false, thread_id, "dead admin");
 					else
 						admin->wait_for_response = false;
 				}
@@ -2815,7 +2812,7 @@ void admin_pause_done(void)
 			}
 
 			if (!res)
-				disconnect_client(admin, false, "dead admin");
+				disconnect_client(admin, false, -1, "dead admin");
 			else
 				admin->wait_for_response = false;
 		}
@@ -2876,7 +2873,7 @@ void admin_wait_close_done(void)
 					res = admin_ready(admin, "WAIT_CLOSE");
 
 					if (!res)
-						disconnect_client(admin, false, "dead admin");
+						disconnect_client(admin, false, thread_id, "dead admin");
 					else
 						admin->wait_for_response = false;
 				}
@@ -2892,7 +2889,7 @@ void admin_wait_close_done(void)
 			res = admin_ready(admin, "WAIT_CLOSE");
 
 			if (!res)
-				disconnect_client(admin, false, "dead admin");
+				disconnect_client(admin, false, -1, "dead admin");
 			else
 				admin->wait_for_response = false;
 		}

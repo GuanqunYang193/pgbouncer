@@ -16,9 +16,9 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *pkt)  _MUSTCHECK;
-void kill_pool_logins(PgPool *pool, const char *sqlstate, const char *msg);
-const char * kill_pool_logins_server_error(PgPool *pool, PktHdr *errpkt);
+bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *pkt, int thread_id)  _MUSTCHECK;
+void kill_pool_logins(PgPool *pool, const char *sqlstate, const char *msg, int thread_id);
+const char * kill_pool_logins_server_error(PgPool *pool, PktHdr *errpkt, int thread_id);
 int connection_pool_mode(PgSocket *connection) _MUSTCHECK;
 int probably_wrong_pool_pool_mode(PgPool *pool) _MUSTCHECK;
 int pool_pool_size(PgPool *pool) _MUSTCHECK;
