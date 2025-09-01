@@ -1711,7 +1711,7 @@ void disconnect_server(PgSocket *server, bool send_term, int thread_id, const ch
 	if (server->pool->user_credentials)
 		server->pool->user_credentials->global_user->connection_count--;
 
-	change_server_state(server, thread_id, SV_JUSTFREE);
+	change_server_state(server, SV_JUSTFREE, thread_id);
 	if (!sbuf_close(&server->sbuf))
 		log_noise("sbuf_close failed, retry later");
 }
