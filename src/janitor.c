@@ -1013,6 +1013,10 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	void* database_list_ptr;
 	void* pool_list_ptr;
 	struct StatList* autodatabase_idle_list_ptr;
+	struct {
+		int seq;
+		int thread_id;
+	} data;
 	int thread_id = get_current_thread_id(multithread_mode);
 
 	static unsigned int seq;
@@ -1023,10 +1027,8 @@ static void do_full_maint(evutil_socket_t sock, short flags, void *arg)
 	}
 	(*seq_ptr) ++;
 
-	struct {
-		int seq;
-		int thread_id;
-	} data = { *seq_ptr, thread_id};
+	data.seq = *seq_ptr;
+	data.thread_id = thread_id;
 	/*
 	 * Avoid doing anything that may surprise other pgbouncer.
 	 */

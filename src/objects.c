@@ -1974,6 +1974,10 @@ static void dns_connect(struct PgSocket *server, int thread_id)
 	int sa_len;
 	int res;
 	char *host_copy = NULL;
+	struct {
+		struct PgSocket *server;
+		int thread_id;
+	} data;
 
 	/* host list? */
 	if (db->host && strchr(db->host, ',')) {
@@ -2053,10 +2057,8 @@ static void dns_connect(struct PgSocket *server, int thread_id)
 		struct DNSToken *tk;
 		slog_noise(server, "dns socket: %s", host);
 		/* launch dns lookup */
-		struct {
-			struct PgSocket *server;
-			int thread_id;
-		} data = {server, thread_id};
+	 	data.server = server;
+		data.thread_id = thread_id;
 		MULTITHREAD_VISIT(multithread_mode, &adns_lock, {tk = adns_resolve(adns, host, dns_callback, &data, thread_id);});
 		if (tk){
 			server->dns_token = tk;
@@ -3103,11 +3105,6 @@ void reuse_just_freed_objects(int thread_id)
 	}
 }
 
-static void kill_database_cb(struct List *item, void *ctx) {
-    PgDatabase *db = container_of(item, PgDatabase, head);
-	int thread_id = *(int *)ctx;
-    kill_database(db, thread_id);
-}
 
 static void objects_cleanup_multithread(void)
 {
