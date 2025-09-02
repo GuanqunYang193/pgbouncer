@@ -761,7 +761,6 @@ loop:
 	el = list_pop(&req->ucb_list);
 	if (!el)
 		return;
-	log_error("adns_resolve: deliver_info %s", req->name);
 	
 	ucb = container_of(el, struct DNSToken, node);
 
@@ -771,9 +770,7 @@ loop:
 	ucb->cb_func(ucb->cb_arg,
 		     ai ? ai->ai_addr : NULL,
 		     ai ? ai->ai_addrlen : 0);
-	log_error("adns_resolve: after callback %s", req->name);
 	free(ucb);
-	log_error("adns_resolve: after free %s", req->name);
 	/* scroll req list */
 	if (ai) {
 		req->current = ai->ai_next;
@@ -859,7 +856,6 @@ struct DNSToken *adns_resolve(struct DNSContext *ctx, const char *name, adns_cal
 	struct DNSRequest *req;
 	struct DNSToken *ucb;
 	struct AANode *node;
-	log_error("adns_resolve: %s", name);
 	/* setup actual lookup */
 	node = aatree_search(&ctx->req_tree, (uintptr_t)name);
 	if (node) {
@@ -888,7 +884,6 @@ struct DNSToken *adns_resolve(struct DNSContext *ctx, const char *name, adns_cal
 		ctx->active++;
 		impl_launch_query(req);
 	}
-	log_error("adns_resolve: after impl_launch_query %s", name);
 	/* remember user callback */
 	ucb = calloc(1, sizeof(*ucb));
 	if (!ucb)
@@ -909,7 +904,6 @@ struct DNSToken *adns_resolve(struct DNSContext *ctx, const char *name, adns_cal
 			deliver_info(req);
 		}
 	}
-	log_error("adns_resolve: done %s", name);
 	/* if ->done, then we have already reported */
 	return req->done ? NULL : ucb;
 nomem:
