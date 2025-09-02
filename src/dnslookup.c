@@ -968,12 +968,10 @@ static void got_result_gai(int result, struct addrinfo *res, void *arg)
 				ai = ai->ai_next;
 			}
 		}
-		log_error("dns: lookup ok: %s", req->thread_id);
 		req->res_ttl = get_multithread_time_with_id(req->thread_id) + cf_dns_max_ttl;
 	} else {
 		/* lookup failed */
 		log_warning("DNS lookup failed: %s: result=%d", req->name, result);
-		log_error("dns: lookup no: %s", req->thread_id);
 		req->res_ttl = get_multithread_time_with_id(req->thread_id) + cf_dns_nxdomain_ttl;
 	}
 
