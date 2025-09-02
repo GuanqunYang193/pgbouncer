@@ -421,7 +421,7 @@ bool show_stat_totals(PgSocket *client)
 		}
 	}
 
-	calc_average(&avg, &st_total, &old_total, get_multithread_time_with_id(get_current_thread_id(multithread_mode)));
+	calc_average(&avg, &st_total, &old_total, get_multithread_time_with_id(-1));
 
 	pktbuf_write_RowDescription(buf, "sN", "name", "value");
 
@@ -494,9 +494,10 @@ static void multithread_stats(evutil_socket_t s, short flags, void *arg){
 }
 
 static void multithread_collect_stats(evutil_socket_t s, short flags, void *arg){
-	PgStats cur_total;
+	PgStats cur_total, old_total;
 	PgStats avg;
 
+	reset_stats(&old_total);
 	reset_stats(&cur_total);
 
 	FOR_EACH_THREAD(thread_id){
@@ -509,10 +510,8 @@ static void multithread_collect_stats(evutil_socket_t s, short flags, void *arg)
 	old_stamp = new_stamp;
 	// use global time rather than per-thread time
 	new_stamp = get_cached_time();
-	calc_average(&avg, &cur_total, &multithread_old_total, get_cached_time());
-	
-	// Save current stats as old stats for next period
-	multithread_old_total = cur_total;
+
+	calc_average(&avg, &cur_total, &old_total, get_cached_time());
 
 	if (cf_log_stats) {
 		log_info(
