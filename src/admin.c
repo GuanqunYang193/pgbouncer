@@ -303,12 +303,13 @@ static bool send_one_fd(PgSocket *admin, int thread_id,
 
 	struct PktBuf *pkt = global_pktbuf_temp();
 
-	pktbuf_write_DataRow(pkt, "Iissssiqisssssbb",
-			     multithread_mode ? thread_id : -1, fd, task, user, db, addr, port,
+	pktbuf_write_DataRow(pkt, "issssiqisssssbbi",
+			     fd, task, user, db, addr, port,
 			     ckey, link, client_enc, std_strings,
 			     datestyle, timezone, password,
 			     scram_client_key_len, scram_client_key,
-			     scram_server_key_len, scram_server_key);
+			     scram_server_key_len, scram_server_key, 
+				 multithread_mode ? thread_id : 0);
 	if (pkt->failed)
 		return false;
 	iovec.iov_base = pkt->buf;
@@ -478,14 +479,15 @@ static bool admin_show_fds(PgSocket *admin, const char *arg)
 	/*
 	 * send resultset
 	 */
-	SEND_RowDescription(res, admin, "Iissssiqisssssbb",
-			    "thread_id", "fd", "task",
+	SEND_RowDescription(res, admin, "issssiqisssssbbi",
+			    "fd", "task",
 			    "user", "database",
 			    "addr", "port",
 			    "cancel", "link",
 			    "client_encoding", "std_strings",
 			    "datestyle", "timezone", "password",
-			    "scram_client_key", "scram_server_key");
+			    "scram_client_key", "scram_server_key",
+				"thread_id");
 	if (res)
 		res = show_pooler_fds(admin);
 
@@ -496,7 +498,7 @@ static bool admin_show_fds(PgSocket *admin, const char *arg)
 				res &= show_fds_from_list(admin, &(threads[thread_id].login_client_list), thread_id);
 			}
 		} else {
-			res &= show_fds_from_list(admin, &login_client_list, -1);
+			res &= show_fds_from_list(admin, &login_client_list, 0);
 		}
 	}
 
@@ -517,7 +519,7 @@ static bool admin_show_fds(PgSocket *admin, const char *arg)
 			if (pool->db->admin)
 				continue;
 
-			show_fds_from_lists(admin, pool, -1, &res);
+			show_fds_from_lists(admin, pool, 0, &res);
 
 			if (!res)
 				break;
@@ -551,9 +553,8 @@ static void show_one_database(int thread_id, PgDatabase *db, PktBuf *buf, struct
 	if (db->host && strchr(db->host, ','))
 		load_balance_hosts_str = cf_get_lookup(load_balance_hosts_lookup);
 
-	pktbuf_write_DataRow(buf, "Ississiiiissiiiiii",
-			     multithread_mode ? thread_id : -1, db->name,
-			     db->host, db->port,
+	pktbuf_write_DataRow(buf, "ssissiiiissiiiiiii",
+				 db->name, db->host, db->port,
 			     db->dbname, f_user,
 			     db->pool_size >= 0 ? db->pool_size : cf_default_pool_size,
 			     db->min_pool_size >= 0 ? db->min_pool_size : cf_min_pool_size,
@@ -566,7 +567,8 @@ static void show_one_database(int thread_id, PgDatabase *db, PktBuf *buf, struct
 			     database_max_client_connections(db),
 			     db->client_connection_count,
 			     db->db_paused,
-			     db->db_disabled);
+			     db->db_disabled, 
+			     multithread_mode ? thread_id : 0);
 }
 
 
@@ -586,12 +588,12 @@ static bool admin_show_databases(PgSocket *admin, const char *arg)
 		return true;
 	}
 
-	pktbuf_write_RowDescription(buf, "Ississiiiissiiiiii",
-				    "thread_id", "name", "host", "port",
+	pktbuf_write_RowDescription(buf, "ssissiiiissiiiiiii",
+				    "name", "host", "port",
 				    "database", "force_user", "pool_size", "min_pool_size", "reserve_pool_size",
 				    "server_lifetime", "pool_mode", "load_balance_hosts", "max_connections",
 				    "current_connections", "max_client_connections", "current_client_connections",
-				    "paused", "disabled");
+				    "paused", "disabled", "thread_id");
 
 	if (multithread_mode) {
 		FOR_EACH_THREAD(thread_id){
@@ -623,27 +625,26 @@ static bool admin_show_peers(PgSocket *admin, const char *arg)
 		return true;
 	}
 
-	pktbuf_write_RowDescription(buf, "Iisii",
-				    "thread_id", "peer_id", "host", "port", "pool_size");
+	pktbuf_write_RowDescription(buf, "isiii",
+				    "peer_id", "host", "port", "pool_size", "thread_id");
 	if(multithread_mode){
 		FOR_EACH_THREAD(thread_id){
 			THREAD_SAFE_STATLIST_EACH(&(threads[thread_id].peer_list), item, {
 				peer = container_of(item, PgDatabase, head);
 
-				pktbuf_write_DataRow(buf, "Iisii",
-						     thread_id,
+				pktbuf_write_DataRow(buf, "isiii",
 						     peer->peer_id, peer->host, peer->port,
-						     peer->pool_size >= 0 ? peer->pool_size : cf_default_pool_size);
+						     peer->pool_size >= 0 ? peer->pool_size : cf_default_pool_size, 
+							 thread_id);
 			});
 		}
 	}else{
 		THREAD_SAFE_STATLIST_EACH(&peer_list, item, {
 			peer = container_of(item, PgDatabase, head);
 
-			pktbuf_write_DataRow(buf, "Iisii",
-					-1,
+			pktbuf_write_DataRow(buf, "isiii",
 					peer->peer_id, peer->host, peer->port,
-					peer->pool_size >= 0 ? peer->pool_size : cf_default_pool_size);
+					peer->pool_size >= 0 ? peer->pool_size : cf_default_pool_size, 0);
 		});
 	}
 	admin_flush(admin, buf, "SHOW");
@@ -767,13 +768,13 @@ static bool admin_show_users(PgSocket *admin, const char *arg)
 	return true;
 }
 
-#define SKF_STD "IssssssisiTTiiississii"
-#define SKF_DBG "IssssssisiTTiiississiiiiiiiii"
+#define SKF_STD "ssssssisiTTiiississiii"
+#define SKF_DBG "ssssssisiTTiiississiiiiiiiiii"
 
 static void socket_header(PktBuf *buf, bool debug)
 {
 	pktbuf_write_RowDescription(buf, debug ? SKF_DBG : SKF_STD,
-				    "thread_id", "type", "user", "database",
+				    "type", "user", "database",
 				    "replication", "state", "addr", "port",
 				    "local_addr", "local_port",
 				    "connect_time", "request_time",
@@ -781,6 +782,7 @@ static void socket_header(PktBuf *buf, bool debug)
 				    "ptr", "link", "remote_pid", "tls",
 				    "application_name",
 				    "prepared_statements", "id",
+					"thread_id",
 					/* debug follows */
 				    "recv_pos", "pkt_pos", "pkt_remain",
 				    "send_pos", "send_remain",
@@ -846,7 +848,6 @@ static void socket_row(PktBuf *buf, PgSocket *sk, int thread_id, const char *sta
 		replication = "physical";
 
 	pktbuf_write_DataRow(buf, debug ? SKF_DBG : SKF_STD,
-			     multithread_mode ? thread_id : 0,
 			     is_server_socket(sk) ? "S" : "C",
 			     sk->login_user_credentials ? sk->login_user_credentials->name : "(nouser)",
 			     sk->pool && !sk->pool->db->peer_id ? sk->pool->db->name : "(nodb)",
@@ -862,6 +863,7 @@ static void socket_row(PktBuf *buf, PgSocket *sk, int thread_id, const char *sta
 			     ptrbuf, linkbuf, remote_pid, infobuf,
 			     application_name ? application_name->str : "",
 			     prepared_statement_count, sk->id,
+				 multithread_mode ? thread_id : 0,
 				/* debug */
 			     io ? io->recv_pos : 0,
 			     io ? io->parse_pos : 0,
@@ -1123,8 +1125,8 @@ static void show_pools_internal(PgPool *pool, PktBuf *buf, int thread_id, usec_t
 	if (pool->db->host && strchr(pool->db->host, ','))
 		load_balance_hosts_str = cf_get_lookup(&load_balance_hosts_lookup);
 
-	pktbuf_write_DataRow(buf, "Issiiiiiiiiiiiiiss",
-			     multithread_mode ? thread_id : -1, pool->db->name, pool->user_credentials->name,
+	pktbuf_write_DataRow(buf, "ssiiiiiiiiiiiiissi",
+			     pool->db->name, pool->user_credentials->name,
 			     statlist_count(&pool->active_client_list),
 			     statlist_count(&pool->waiting_client_list),
 			     statlist_count(&pool->active_cancel_req_list),
@@ -1140,7 +1142,8 @@ static void show_pools_internal(PgPool *pool, PktBuf *buf, int thread_id, usec_t
 			     (int)(max_wait / USEC),
 			     (int)(max_wait % USEC),
 			     cf_get_lookup(cv),
-			     load_balance_hosts_str);
+			     load_balance_hosts_str, 
+				 multithread_mode ? thread_id : 0);
 }
 
 
@@ -1161,8 +1164,7 @@ static bool admin_show_pools(PgSocket *admin, const char *arg)
 		admin_error(admin, "no mem");
 		return true;
 	}
-	pktbuf_write_RowDescription(buf, "Issiiiiiiiiiiiiiss",
-				    "thread_id",
+	pktbuf_write_RowDescription(buf, "ssiiiiiiiiiiiiissi",
 				    "database", "user",
 				    "cl_active", "cl_waiting",
 				    "cl_active_cancel_req",
@@ -1174,7 +1176,8 @@ static bool admin_show_pools(PgSocket *admin, const char *arg)
 				    "sv_used", "sv_tested",
 				    "sv_login", "maxwait",
 				    "maxwait_us", "pool_mode",
-				    "load_balance_hosts");
+				    "load_balance_hosts", 
+					"thread_id");
 
 	if (multithread_mode) {
 		FOR_EACH_THREAD(thread_id){
@@ -1205,17 +1208,18 @@ static bool admin_show_peer_pools(PgSocket *admin, const char *arg)
 		admin_error(admin, "no mem");
 		return true;
 	}
-	pktbuf_write_RowDescription(buf, "Iiiiii",
-				    "thread_id", "peer_id",
+	pktbuf_write_RowDescription(buf, "iiiiii",
+				    "peer_id",
 				    "cl_active_cancel_req",
 				    "cl_waiting_cancel_req",
 				    "sv_active_cancel",
-				    "sv_login");
+				    "sv_login", 
+					"thread_id");
 	if (multithread_mode) {
 		FOR_EACH_THREAD(thread_id){
 			THREAD_SAFE_STATLIST_EACH((&threads[thread_id].peer_pool_list), item, {
 				pool = container_of(item, PgPool, head);
-				pktbuf_write_DataRow(buf, "Iiiiii",
+				pktbuf_write_DataRow(buf, "iiiiii",
 						     thread_id, pool->db->peer_id,
 						     statlist_count(&pool->active_cancel_req_list),
 						     statlist_count(&pool->waiting_cancel_req_list),
@@ -1226,8 +1230,8 @@ static bool admin_show_peer_pools(PgSocket *admin, const char *arg)
 	} else {
 		THREAD_SAFE_STATLIST_EACH(&peer_pool_list, item, {
 			pool = container_of(item, PgPool, head);
-			pktbuf_write_DataRow(buf, "Iiiiii",
-					     -1, pool->db->peer_id,
+			pktbuf_write_DataRow(buf, "iiiiii",
+					     0, pool->db->peer_id,
 					     statlist_count(&pool->active_cancel_req_list),
 					     statlist_count(&pool->waiting_cancel_req_list),
 					     statlist_count(&pool->active_cancel_server_list),
