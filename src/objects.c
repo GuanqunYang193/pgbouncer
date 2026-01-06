@@ -199,6 +199,7 @@ void init_objects(void)
 	thread_safe_statlist_init(&pool_list, "pool_list", true);
 	thread_safe_statlist_init(&database_list, "database_list", true);
 	thread_safe_statlist_init(&autodatabase_idle_list, "autodatabase_idle_list", true);
+	thread_safe_statlist_init(&sock_list, "socket_list", true);
 	aatree_init(&user_tree, global_user_node_cmp, NULL);
 	aatree_init(&pam_user_tree, credentials_node_cmp, NULL);
 	spin_lock_init(&user_tree_lock, true);
@@ -2222,7 +2223,6 @@ allow_new:
 			return;
 		}
 	}
-
 	max = user_max_connections(pool->user_credentials->global_user);
 	if (max > 0) {
 		/* try to evict unused connection first */
@@ -2247,7 +2247,6 @@ allow_new:
 			return;
 		}
 	}
-
 force_new:
 	/* get free conn object */
 	server = slab_alloc(server_cache_ptr);

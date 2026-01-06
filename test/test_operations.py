@@ -6,7 +6,7 @@ import pytest
 
 from .utils import PG_SUPPORTS_SCRAM, WINDOWS
 
-
+@pytest.mark.single_thread_only
 @pytest.mark.skipif("WINDOWS", reason="gets stuck for some reason during takeover")
 async def test_online_restart(bouncer):
     for _ in range(5):
@@ -107,7 +107,7 @@ def test_reconnect(bouncer):
     pid2 = bouncer.sql_value("select pg_backend_pid()")
     assert pid1 != pid2
 
-
+@pytest.mark.single_thread_only
 @pytest.mark.skipif("not PG_SUPPORTS_SCRAM")
 @pytest.mark.skipif("WINDOWS", reason="gets stuck for some reason during takeover")
 async def test_scram_takeover(bouncer):

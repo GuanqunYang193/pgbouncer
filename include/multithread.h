@@ -141,6 +141,7 @@ typedef struct Thread {
 	pthread_t worker;
 	struct event_base *base;
 	int thread_id;
+	bool ready;		/* Flag to indicate thread initialization is complete */
 	struct event full_maint_ev;
 	struct event ev_stats;
 	struct event ev_handle_request;
@@ -176,10 +177,6 @@ typedef struct Thread {
 
 	int cf_shutdown;
 	int cf_pause_mode;	/* Thread-local pause mode */
-	bool pause_ready;	/* Thread ready for pause response */
-	bool wait_close_ready;	/* Thread ready for wait_close response */
-	bool partial_pause;	/* Thread has database-specific pauses */
-	int active_count;	/* Thread-local active count for pause/suspend */
 
 	unsigned int seq;
 
@@ -220,6 +217,7 @@ void multithread_event_wrapper(evutil_socket_t sock, short flags, void *arg);
 
 bool multithread_limits_init(ConnectionLimit **limit, SpinLock *lock);
 void multithread_set_limit(const char *name, ConnectionLimit **limits, SpinLock *lock, int limit);
+void multithread_remove_limit(const char *name, ConnectionLimit **limits, SpinLock *lock);
 int multithread_get_limit(const char *name, ConnectionLimit **limits, SpinLock *lock);
 int multithread_get_limit_count(const char *name, ConnectionLimit **limits, SpinLock *lock);
 void multithread_increase_limit_count(const char *name, ConnectionLimit **limits, SpinLock *lock);
