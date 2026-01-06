@@ -191,6 +191,13 @@ static void start_auth_query(PgSocket *client, const char *username)
 	}
 	client->wait_for_user_conn = true;
 	if (!find_server(client)) {
+		/*
+		 * In multithread mode the auth_query pool is thread-local, so if this
+		 * thread just queued the login waiting for a server there might not be
+		 * any immediate trigger outside janitor to open that backend.
+		 */
+		if (multithread_mode)
+			launch_new_connection(client->pool, /* evict_if_needed= */ true);
 		return;
 	}
 	slog_noise(client, "doing auth_conn query: %s", auth_query);
@@ -350,29 +357,15 @@ static bool finish_set_pool(PgSocket *client, bool takeover)
 		if (client->sbuf.tls) {
 			char infobuf[96] = "";
 			tls_get_connection_info(client->sbuf.tls, infobuf, sizeof infobuf);
-			if (multithread_mode) {
-				slog_info(client, "[Thread %d] login attempt: db=%s user=%s tls=%s replication=%s",
-					  client->sbuf.thread_id,
-					  client->db->name,
-					  client->login_user_credentials->name,
-					  infobuf,
-					  replication_type_parameters[client->replication]);
-			} else {
-				slog_info(client, "login attempt: db=%s user=%s tls=%s replication=%s",
-					  client->db->name,
-					  client->login_user_credentials->name,
-					  infobuf,
-					  replication_type_parameters[client->replication]);
-			}
+			slog_info(client, "login attempt: db=%s user=%s tls=%s replication=%s",
+				  client->db->name,
+				  client->login_user_credentials->name,
+				  infobuf,
+				  replication_type_parameters[client->replication]);
 		} else {
-			if (multithread_mode) {
-				slog_info(client, "[Thread %d] login attempt: db=%s user=%s tls=no replication=%s",
-					  client->sbuf.thread_id, client->db->name, client->login_user_credentials->name,
-					  replication_type_parameters[client->replication]);
-			} else {
-				slog_info(client, "login attempt: db=%s user=%s tls=no replication=%s", client->db->name, client->login_user_credentials->name,
-					  replication_type_parameters[client->replication]);
-			}
+			slog_info(client, "login attempt: db=%s user=%s tls=no replication=%s",
+				  client->db->name, client->login_user_credentials->name,
+				  replication_type_parameters[client->replication]);
 		}
 	}
 

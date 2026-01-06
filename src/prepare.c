@@ -105,19 +105,14 @@ static PgClientPreparedStatement *create_client_prepared_statement(char const *n
 static PgServerPreparedStatement *create_server_prepared_statement(PgPreparedStatement *ps)
 {
 	PgServerPreparedStatement *server_ps;
-	struct Slab *server_prepared_statement_cache_ = NULL;
-	if (multithread_mode) {
-		int thread_id = get_current_thread_id();
-		server_prepared_statement_cache_ = threads[thread_id].server_prepared_statement_cache;
-	} else {
-		server_prepared_statement_cache_ = server_prepared_statement_cache;
-	}
+	struct Slab *server_prepared_statement_cache_ = GET_VAR(server_prepared_statement_cache);
 	server_ps = slab_alloc(server_prepared_statement_cache_);
 	if (server_ps == NULL)
 		return NULL;
 
 	server_ps->ps = ps;
 	server_ps->query_id = ps->query_id;
+	server_ps->thread_id = get_current_thread_id();
 	ps->use_count += 1;
 	return server_ps;
 }
@@ -197,15 +192,19 @@ static void skip_possibly_completely_buffered_packet(PgSocket *client, PktHdr *p
  */
 void free_server_prepared_statement(PgServerPreparedStatement *server_ps)
 {
+	struct Slab *server_prepared_statement_cache_;
+
 	if (server_ps == NULL)
 		return;
+	server_prepared_statement_cache_ =
+		GET_MULTITHREAD_VAR(server_prepared_statement_cache, server_ps->thread_id);
 	if (--server_ps->ps->use_count == 0) {
 		MULTITHREAD_VISIT(&prepared_statements_lock, {
 			HASH_DEL(prepared_statements, server_ps->ps);
 		});
 		free(server_ps->ps);
 	}
-	slab_free(server_prepared_statement_cache, server_ps);
+	slab_free(server_prepared_statement_cache_, server_ps);
 }
 
 /*

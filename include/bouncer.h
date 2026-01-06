@@ -394,6 +394,14 @@ struct PgPool {
 	struct StatList waiting_cancel_req_list;
 
 	/*
+	 * Lock protecting waiting_cancel_req_list, active_cancel_req_list, and
+	 * new_server_list for cancel forwarding operations.  In multithread mode,
+	 * cancel requests arriving on one thread may target a pool owned by a
+	 * different thread.
+	 */
+	SpinLock cancel_req_lock;
+
+	/*
 	 * Clients that sent a cancel request, to cancel another client its query.
 	 * This request was already forwarded to a server. They are waiting for a
 	 * response from the server.
@@ -694,6 +702,7 @@ struct PgSocket {
 
 	bool contributes_db_client_count : 1;
 	bool user_connection_counted : 1;
+	bool contributes_global_client_count : 1;
 
 	bool ready : 1;			/* server: accepts new query */
 	bool idle_tx : 1;		/* server: idling in tx */

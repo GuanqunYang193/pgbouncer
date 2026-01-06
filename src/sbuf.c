@@ -198,14 +198,9 @@ bool sbuf_connect(SBuf *sbuf, const struct sockaddr *sa, socklen_t sa_len, time_
 		/* tcp socket needs waiting */
 		struct event_base *base = pgb_event_base;
 		if (multithread_mode) {
-			MultithreadEventArgs *sbuf_ev_args = malloc(sizeof(MultithreadEventArgs));
-			if (!sbuf_ev_args) {
-				log_error("Failed to allocate memory for MultithreadEventArgs");
-				return false;
-			}
 			base = threads[sbuf->thread_id].base;
-			setup_multithread_event_args(sbuf_ev_args, sbuf, sbuf_connect_cb, false, &threads[sbuf->thread_id].thread_lock);
-			event_assign(&sbuf->ev, base, sock, EV_WRITE, multithread_event_wrapper, sbuf_ev_args);
+			setup_multithread_event_args(&sbuf->ev_once_args, sbuf, sbuf_connect_cb, true, &threads[sbuf->thread_id].thread_lock);
+			event_assign(&sbuf->ev, base, sock, EV_WRITE, multithread_event_wrapper, &sbuf->ev_once_args);
 		} else {
 			event_assign(&sbuf->ev, base, sock, EV_WRITE, sbuf_connect_cb, sbuf);
 		}
@@ -317,10 +312,9 @@ bool sbuf_use_callback_once(SBuf *sbuf, short ev, event_callback_fn user_cb)
 
 	/* setup one one-off event handler */
 	if (multithread_mode) {
-		MultithreadEventArgs *sbuf_ev_args = malloc(sizeof(MultithreadEventArgs));
 		base = threads[sbuf->thread_id].base;
-		setup_multithread_event_args(sbuf_ev_args, sbuf, user_cb, false, &threads[sbuf->thread_id].thread_lock);
-		event_assign(&sbuf->ev, base, sbuf->sock, ev, multithread_event_wrapper, sbuf_ev_args);
+		setup_multithread_event_args(&sbuf->ev_once_args, sbuf, user_cb, true, &threads[sbuf->thread_id].thread_lock);
+		event_assign(&sbuf->ev, base, sbuf->sock, ev, multithread_event_wrapper, &sbuf->ev_once_args);
 	} else {
 		event_assign(&sbuf->ev, base, sbuf->sock, ev, user_cb, sbuf);
 	}
@@ -596,10 +590,9 @@ static bool sbuf_wait_for_data_forced(SBuf *sbuf)
 	}
 
 	if (multithread_mode) {
-		MultithreadEventArgs *sbuf_ev_args = malloc(sizeof(MultithreadEventArgs));
 		base = threads[sbuf->thread_id].base;
-		setup_multithread_event_args(sbuf_ev_args, sbuf, sbuf_recv_forced_cb, false, &threads[sbuf->thread_id].thread_lock);
-		event_assign(&sbuf->ev, base, sbuf->sock, EV_READ, multithread_event_wrapper, sbuf_ev_args);
+		setup_multithread_event_args(&sbuf->ev_once_args, sbuf, sbuf_recv_forced_cb, true, &threads[sbuf->thread_id].thread_lock);
+		event_assign(&sbuf->ev, base, sbuf->sock, EV_READ, multithread_event_wrapper, &sbuf->ev_once_args);
 	} else {
 		event_assign(&sbuf->ev, base, sbuf->sock, EV_READ, sbuf_recv_forced_cb, sbuf);
 	}
@@ -659,10 +652,9 @@ static bool sbuf_queue_send(SBuf *sbuf)
 
 	/* instead wait for EV_WRITE on destination socket */
 	if (multithread_mode) {
-		MultithreadEventArgs *sbuf_ev_args = malloc(sizeof(MultithreadEventArgs));
 		base = threads[sbuf->thread_id].base;
-		setup_multithread_event_args(sbuf_ev_args, sbuf, sbuf_send_cb, false, &threads[sbuf->thread_id].thread_lock);
-		event_assign(&sbuf->ev, base, sbuf->dst->sock, EV_WRITE, multithread_event_wrapper, sbuf_ev_args);
+		setup_multithread_event_args(&sbuf->ev_once_args, sbuf, sbuf_send_cb, true, &threads[sbuf->thread_id].thread_lock);
+		event_assign(&sbuf->ev, base, sbuf->dst->sock, EV_WRITE, multithread_event_wrapper, &sbuf->ev_once_args);
 	} else {
 		event_assign(&sbuf->ev, base, sbuf->dst->sock, EV_WRITE, sbuf_send_cb, sbuf);
 	}

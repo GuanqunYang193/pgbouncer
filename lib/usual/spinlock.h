@@ -8,7 +8,7 @@
 #   define GET_THREAD_ID() (GetCurrentThreadId())
 #   define MEMORY_BARRIER() MemoryBarrier()
 #   define THREAD_ID_EQUALS(a, b) a == b
-#   define RESET_LOCK_WORD(a) InterlockedExchangePointer((PVOID *)&a, NULL);
+#   define RESET_LOCK_WORD(a) InterlockedExchange((LONG volatile *)&a, 0)
 
 #else
     #include <usual/pthread.h>
