@@ -218,6 +218,9 @@ static void per_loop_activate(PgPool *pool)
 		    && ((time - client->wait_start) / USEC) > cf_query_wait_notify
 		    && cf_query_wait_notify > 0) {
 			buf = pktbuf_dynamic(256);
+			if (!buf)
+				die("out of memory");
+
 			pktbuf_write_Notice(
 				buf,
 				"No server connection available in postgres backend, client being queued"
@@ -635,6 +638,48 @@ static void pool_server_maint(PgPool *pool)
 	struct List *item, *tmp;
 	usec_t now = get_multithread_time_with_id(thread_id);
 	PgSocket *server;
+
+	/*
+	 * In multithread mode, another thread may have set evict_idle_for_auth_query
+	 * because it needs a db connection slot for an auth_query but
+	 * max_db_connections is exhausted. Evict one idle server from this pool
+	 * to make room, allowing that thread's janitor to create the auth_query
+	 * connection on the next cycle.
+	 */
+	if (multithread_mode) {
+		bool need_evict_db = false;
+		bool need_evict_user = false;
+
+		MULTITHREAD_VISIT(&db_connection_limits_lock, {
+			if (pool->db->evict_idle_for_auth_query) {
+				if (last_socket(&pool->idle_server_list) != NULL) {
+					need_evict_db = true;
+					pool->db->evict_idle_for_auth_query = false;
+				}
+			}
+		});
+		if (need_evict_db) {
+			PgSocket *oldest = last_socket(&pool->idle_server_list);
+			if (oldest)
+				disconnect_server(oldest, true, "evicted for auth_query");
+		}
+
+		if (pool->user_credentials && pool->user_credentials->global_user) {
+			MULTITHREAD_VISIT(&pool->user_credentials->global_user->lock, {
+				if (pool->user_credentials->global_user->evict_idle_for_user) {
+					if (last_socket(&pool->idle_server_list) != NULL) {
+						need_evict_user = true;
+						pool->user_credentials->global_user->evict_idle_for_user = false;
+					}
+				}
+			});
+		}
+		if (need_evict_user) {
+			PgSocket *oldest = last_socket(&pool->idle_server_list);
+			if (oldest)
+				disconnect_server(oldest, true, "evicted for user connection limit");
+		}
+	}
 
 	/* find and disconnect idle servers */
 	check_unused_servers(pool, &pool->used_server_list, 0);

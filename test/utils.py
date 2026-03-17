@@ -283,6 +283,7 @@ class QueryRunner:
         self.port = port
         self.default_db = "postgres"
         self.default_user = "postgres"
+        self.default_password: typing.Optional[str] = None
 
         # Used to track objects that we want to clean up at the end of a test
         self.subscriptions = set()
@@ -297,6 +298,9 @@ class QueryRunner:
         options.setdefault("user", self.default_user)
         options.setdefault("host", self.host)
         options.setdefault("port", self.port)
+        if self.default_password is not None:
+            options.setdefault("password", self.default_password)
+
         if ENABLE_VALGRIND:
             # If valgrind is enabled PgBouncer is a significantly slower to
             # respond to connection requests, so we wait a little longer.
@@ -498,36 +502,45 @@ class QueryRunner:
     @contextmanager
     def drop_traffic(self):
         """Drops all TCP packets to this query runner"""
-        with self.enable_firewall():
-            if LINUX:
-                sudo(
-                    "iptables --append OUTPUT "
-                    "--protocol tcp "
-                    f"--destination {self.host} "
-                    f"--destination-port {self.port} "
-                    "--jump DROP "
-                )
-            elif BSD:
-                sudo(
-                    "sh -c '"
-                    f'echo "block drop out proto tcp from any to {self.host} port {self.port}"'
-                    f"| pfctl -a pgbouncer_test/port_{self.port} -f -'"
-                )
-            else:
-                raise Exception("This OS cannot run this test")
+        # Retry on transient "Device busy" errors from pfctl when multiple test
+        # workers call enable_firewall concurrently on FreeBSD.
+        for attempt in range(10):
             try:
-                yield
-            finally:
-                if LINUX:
-                    sudo(
-                        "iptables --delete OUTPUT "
-                        "--protocol tcp "
-                        f"--destination {self.host} "
-                        f"--destination-port {self.port} "
-                        "--jump DROP "
-                    )
-                elif BSD:
-                    sudo(f"pfctl -a pgbouncer_test/port_{self.port} -F all")
+                with self.enable_firewall():
+                    if LINUX:
+                        sudo(
+                            "iptables --append OUTPUT "
+                            "--protocol tcp "
+                            f"--destination {self.host} "
+                            f"--destination-port {self.port} "
+                            "--jump DROP "
+                        )
+                    elif BSD:
+                        sudo(
+                            "sh -c '"
+                            f'echo "block drop out proto tcp from any to {self.host} port {self.port}"'
+                            f"| pfctl -a pgbouncer_test/port_{self.port} -f -'"
+                        )
+                    else:
+                        raise Exception("This OS cannot run this test")
+                    try:
+                        yield
+                    finally:
+                        if LINUX:
+                            sudo(
+                                "iptables --delete OUTPUT "
+                                "--protocol tcp "
+                                f"--destination {self.host} "
+                                f"--destination-port {self.port} "
+                                "--jump DROP "
+                            )
+                        elif BSD:
+                            sudo(f"pfctl -a pgbouncer_test/port_{self.port} -F all")
+                return
+            except subprocess.CalledProcessError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.1 * (attempt + 1))
 
     @contextmanager
     def reject_traffic(self):
@@ -968,6 +981,7 @@ class Bouncer(QueryRunner):
         self.admin_runner = QueryRunner(self.admin_host, self.port)
         self.admin_runner.default_db = "pgbouncer"
         self.admin_runner.default_user = "pgbouncer"
+        self.admin_runner.default_password = "fake"
 
         with open(base_auth_path) as base_auth:
             with self.auth_path.open("w") as auth:

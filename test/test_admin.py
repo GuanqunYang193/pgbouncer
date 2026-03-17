@@ -72,6 +72,7 @@ def test_show(bouncer):
         bouncer.admin(f"SHOW {item}")
 
 
+@pytest.mark.single_thread_only
 def test_socket_id(bouncer) -> None:
     """Test that PgSocket id is assigned as expected for sockets."""
     config = f"""
@@ -111,6 +112,51 @@ def test_socket_id(bouncer) -> None:
                         initial_id + i * 2,
                     ]
                 ) == set([client["id"] for client in clients])
+                conn_2.close()
+                time.sleep(2)
+
+
+@pytest.mark.multithread_only
+def test_socket_id_multithread(bouncer) -> None:
+    """Test that PgSocket id is monotonically increasing for sockets in multithread mode.
+
+    In multithread mode, server_lifetime=0 can cause background threads to create
+    and close connections, consuming IDs in between iterations, so the exact
+    per-iteration increment is not predictable. Instead we verify that each new
+    session's sockets have strictly higher IDs than the previous iteration's.
+    """
+    config = f"""
+    [databases]
+    p1 = host={bouncer.pg.host} port={bouncer.pg.port}
+
+    [pgbouncer]
+    listen_addr = {bouncer.host}
+    listen_port = {bouncer.port}
+    auth_type = trust
+    admin_users = pgbouncer
+    logfile = {bouncer.log_path}
+    auth_file = {bouncer.auth_path}
+    pool_mode = session
+    server_lifetime = 0
+    """
+
+    with bouncer.run_with_config(config):
+        with bouncer.cur(
+            dbname="pgbouncer", user="pgbouncer", row_factory=dict_row
+        ) as admin_cursor:
+            prev_max_id = None
+
+            for _ in range(3):
+                conn_2 = bouncer.conn(dbname="p1")
+                curr = conn_2.cursor()
+                _ = curr.execute("SELECT 1")
+                time.sleep(2)
+                sockets = admin_cursor.execute("SHOW SOCKETS").fetchall()
+                assert len(sockets) == 3
+                current_max_id = max(s["id"] for s in sockets)
+                if prev_max_id is not None:
+                    assert current_max_id > prev_max_id
+                prev_max_id = current_max_id
                 conn_2.close()
                 time.sleep(2)
 

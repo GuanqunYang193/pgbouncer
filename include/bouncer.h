@@ -586,6 +586,13 @@ struct PgGlobalUser {
 	int max_user_client_connections;	/* how many client connections are allowed */
 	int connection_count;	/* how many server connections are used by user now */
 	int client_connection_count;	/* how many client connections are used by user now */
+	/*
+	 * In multithread mode, set when a new server connection for this user
+	 * is needed but max_user_connections is exhausted by other threads.
+	 * When set, other threads' janitors will evict one idle server to make
+	 * room. Protected by lock.
+	 */
+	bool evict_idle_for_user;
 };
 
 /*
@@ -633,6 +640,13 @@ struct PgDatabase {
 	bool db_disabled;	/* is the database accepting new connections? */
 	bool admin;		/* internal console db */
 	bool fake;		/* not a real database, only for mock auth */
+	/*
+	 * In multithread mode, set when an auth_query needs a server connection
+	 * but max_db_connections is exhausted by other threads. When set, other
+	 * threads' janitors will evict one idle server to make room.
+	 * Protected by db_connection_limits_lock.
+	 */
+	bool evict_idle_for_auth_query;
 	usec_t inactive_time;	/* when auto-database became inactive (to kill it after timeout) */
 	unsigned active_stamp;	/* set if autodb has connections */
 	int connection_count;	/* total connections for this database in all pools */
@@ -779,7 +793,7 @@ struct PgSocket {
 		uint8_t ServerKey[32];
 	} scram_state;
 #ifdef HAVE_LDAP
-	char ldap_parameters[MAX_LDAP_CONFIG];
+	char ldap_options[MAX_LDAP_CONFIG];
 #endif
 
 	VarCache vars;		/* state of interesting server parameters */
@@ -887,7 +901,7 @@ extern char *cf_auth_query;
 extern char *cf_auth_user;
 extern char *cf_auth_hba_file;
 extern char *cf_auth_dbname;
-extern char *cf_auth_ldap_parameter;
+extern char *cf_auth_ldap_options;
 
 extern char *cf_pidfile;
 

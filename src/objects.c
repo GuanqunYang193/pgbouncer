@@ -2136,6 +2136,19 @@ bool evict_connection(PgDatabase *db, int thread_id)
 		disconnect_server(oldest_connection, true, "evicted");
 		return true;
 	}
+
+	/*
+	 * In multithread mode, the global db connection count may be exhausted
+	 * by connections on other threads that we cannot safely evict directly.
+	 * Signal those threads to evict an idle connection on our behalf by
+	 * setting the flag; the owning thread's janitor will handle it.
+	 */
+	if (multithread_mode) {
+		MULTITHREAD_VISIT(&db_connection_limits_lock, {
+			db->evict_idle_for_auth_query = true;
+		});
+	}
+
 	return false;
 }
 
@@ -2183,6 +2196,13 @@ bool evict_user_connection(PgCredentials *user_credentials, int thread_id)
 		disconnect_server(oldest_connection, true, "evicted");
 		return true;
 	}
+
+	if (multithread_mode) {
+		MULTITHREAD_VISIT(&user_credentials->global_user->lock, {
+			user_credentials->global_user->evict_idle_for_user = true;
+		});
+	}
+
 	return false;
 }
 
