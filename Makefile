@@ -14,6 +14,7 @@ pgbouncer_SOURCES = \
 	src/messages.c \
 	src/main.c \
 	src/multithread.c \
+	src/sig.c \
 	src/objects.c \
 	src/pam.c \
 	src/pktbuf.c \
@@ -51,6 +52,7 @@ pgbouncer_SOURCES = \
 	include/messages.h \
 	include/multithread.h \
 	include/objects.h \
+	include/sig.h \
 	include/pam.h \
 	include/pktbuf.h \
 	include/pooler.h \

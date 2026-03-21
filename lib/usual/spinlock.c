@@ -4,8 +4,6 @@
 #include <sched.h>
 #endif
 
-#define SPIN_LOCK_INITIALIZED 1
-
 bool spin_lock_owns(SpinLock *lock)
 {
 #ifdef WIN32

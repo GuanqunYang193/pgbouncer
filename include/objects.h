@@ -16,31 +16,79 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-extern struct ThreadSafeStatList thread_safe_user_list;
+/*
+ * Per-worker state.  There is exactly one Worker per event-loop worker:
+ * a single instance (workers[0]) in single-thread mode, and N instances
+ * in multithread mode.  Fields in the "multithread-only" section are
+ * never accessed when multithread_mode == false.
+ */
+typedef struct Worker {
+	struct event_base *base;
+	struct event full_maint_ev;
+	struct event ev_stats;
+	struct event ev_handle_request;
+	struct StatList login_client_list;
+	struct ThreadSafeStatList pool_list;
+	struct ThreadSafeStatList peer_pool_list;
+	struct Slab *client_cache;
+	struct Slab *server_cache;
+	struct Slab *pool_cache;
+	struct Slab *peer_pool_cache;
+	struct Slab *var_list_cache;
+	struct Slab *iobuf_cache;
+	struct Slab *server_prepared_statement_cache;
+	struct Slab *outstanding_request_cache;
+
+	/*
+	 * libevent may still report events when event_del()
+	 * is called from somewhere else.  So hide just freed
+	 * PgSockets for one loop.
+	 */
+	struct StatList justfree_client_list;
+	struct StatList justfree_server_list;
+
+	struct StrPool *vpool;
+	struct PktBuf *temp_pktbuf;
+	struct PgPool *admin_pool;
+
+	WorkerEventArgs do_full_maint_event_args;
+	WorkerEventArgs handle_request_event_args;
+
+	int thread_id;
+	int cf_shutdown;
+	int cf_pause_mode;	/* per-worker pause mode */
+	unsigned int seq;
+
+	/* multithread-only fields */
+	SpinLock thread_lock;
+	pthread_t worker;
+	evutil_socket_t pipefd[2];	/* Pipe for receiving new client connections from main thread */
+	struct WorkerSignalEvents worker_signal_events;
+	usec_t time_cache;
+	bool ready;			/* Set by worker thread once its event loop is initialized */
+} Worker;
+
+/* New client connection dispatched from the main thread to a worker pipe. */
+typedef struct ClientRequest {
+	int fd;
+	bool is_unix;
+} ClientRequest;
+
+extern Worker *workers;
+
+extern struct ThreadSafeStatList user_list;
 extern struct AATree user_tree;
-extern struct ThreadSafeStatList pool_list;
-extern struct ThreadSafeStatList peer_pool_list;
 extern struct ThreadSafeStatList database_list;
 extern struct ThreadSafeStatList peer_list;
 extern struct ThreadSafeStatList autodatabase_idle_list;
-extern struct StatList login_client_list;
-extern struct Slab *client_cache;
-extern struct Slab *server_cache;
 extern struct ThreadSafeSlab *db_cache;
 extern struct Slab *peer_cache;
-extern struct Slab *peer_pool_cache;
-extern struct Slab *pool_cache;
-extern struct ThreadSafeSlab *thread_safe_user_cache;
-extern struct ThreadSafeSlab *thread_safe_credentials_cache;
+extern struct ThreadSafeSlab *user_cache;
+extern struct ThreadSafeSlab *credentials_cache;
 extern struct ThreadSafeStatList sock_list;
-extern struct Slab *iobuf_cache;
-extern struct Slab *outstanding_request_cache;
-extern struct Slab *var_list_cache;
-extern struct Slab *server_prepared_statement_cache;
 extern PgPreparedStatement *prepared_statements;
 extern SpinLock prepared_statements_lock;
 
-// FIXME support for multithreads?
 extern unsigned long long int last_pgsocket_id;
 
 PgDatabase *find_peer(int peer_id);
@@ -116,9 +164,7 @@ void for_each_server(PgPool *pool, void (*func)(PgSocket *sk));
 void reuse_just_freed_objects(void);
 
 void init_objects(void);
-void init_objects_multithread(void);
 
 void init_caches(void);
-void init_caches_multithread(void);
 
 void objects_cleanup(void);

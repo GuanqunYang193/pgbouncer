@@ -186,17 +186,23 @@ def test_max_db_client_connections_positive(bouncer, test_db: str, test_user) ->
 
 
 async def test_pool_size(pg, bouncer):
-    thread_number = bouncer.get_thread_number()
+    worker_thread_counter = bouncer.get_worker_thread_count()
     # per user pool_size
     await bouncer.asleep(0.5, dbname="p0a", user="poolsize1", times=3)
-    assert pg.connection_count(dbname="p0", users=("poolsize1",)) == 1 * thread_number
+    assert (
+        pg.connection_count(dbname="p0", users=("poolsize1",))
+        == 1 * worker_thread_counter
+    )
     # even though we connect using user poolsize1 its setting do not apply is forced user is configured for db
     await bouncer.asleep(0.5, dbname="p0", user="poolsize1", times=5)
-    assert pg.connection_count(dbname="p0", users=("bouncer",)) == 2 * thread_number
+    assert (
+        pg.connection_count(dbname="p0", users=("bouncer",))
+        == 2 * worker_thread_counter
+    )
 
     # per db pool_size
     await bouncer.asleep(0.5, times=5)
-    assert pg.connection_count("p0") == 2 * thread_number
+    assert pg.connection_count("p0") == 2 * worker_thread_counter
 
     # global pool_size
     bouncer.default_db = "p1"
@@ -204,18 +210,18 @@ async def test_pool_size(pg, bouncer):
     # longer sleep so the backend connections have time to ramp up before the
     # earliest queries complete and the servers get reused.
     await bouncer.asleep(1.5, times=10)
-    assert pg.connection_count("p1") == 5 * thread_number
+    assert pg.connection_count("p1") == 5 * worker_thread_counter
 
     # test reload (GH issue #248)
     bouncer.admin("set default_pool_size = 7")
-    bouncer.admin(f"set max_client_conn={10*thread_number}")
+    bouncer.admin(f"set max_client_conn={10*worker_thread_counter}")
     # Same timing issue as above, but with the larger pool size after reload.
-    await bouncer.asleep(1.5, times=10 * thread_number)
-    assert pg.connection_count("p1") == 7 * thread_number
+    await bouncer.asleep(1.5, times=10 * worker_thread_counter)
+    assert pg.connection_count("p1") == 7 * worker_thread_counter
 
 
 async def test_min_pool_size(pg, bouncer):
-    thread_number = bouncer.get_thread_number()
+    worker_thread_counter = bouncer.get_worker_thread_count()
     # uncommenting the db that has "forced" maintenance enabled
     # by not having this db enabled we avoid polluting other tests
     # with connections getting autocreated
@@ -236,7 +242,10 @@ async def test_min_pool_size(pg, bouncer):
     assert pg.connection_count(dbname="p0", users=("bouncer",)) == 0
     # ensure db with min_pool_size and forced user (p0z) has the required
     # backend connections
-    assert pg.connection_count(dbname="p0", users=("pswcheck",)) == 3 * thread_number
+    assert (
+        pg.connection_count(dbname="p0", users=("pswcheck",))
+        == 3 * worker_thread_counter
+    )
 
     # ensure db with min_pool_size and no forced user (p0x) has no backend
     # connections
@@ -527,7 +536,7 @@ def test_min_pool_size_with_lower_max_db_connections(bouncer):
 
 
 async def test_reserve_pool_size(pg, bouncer):
-    thread_number = bouncer.get_thread_number()
+    worker_thread_counter = bouncer.get_worker_thread_count()
     bouncer.admin("set reserve_pool_size = 3")
     bouncer.admin("set reserve_pool_timeout = 2")
 
@@ -535,93 +544,105 @@ async def test_reserve_pool_size(pg, bouncer):
     bouncer.admin("set server_tls_sslmode = disable")
     # Use exactly pool_size + reserve_pool_size connections per thread so that
     # every connection eventually gets served.
-    bouncer.admin(f"set max_client_conn = {8*thread_number}")
+    bouncer.admin(f"set max_client_conn = {8*worker_thread_counter}")
     with bouncer.log_contains(
-        "taking connection from reserve_pool", times=3 * thread_number
+        "taking connection from reserve_pool", times=3 * worker_thread_counter
     ):
         # default_pool_size is 5, so 3 connections per thread will need to wait
         # until the reserve_pool_timeout (2 seconds) is reached. At that point
         # all 3 reserve slots should be used.
-        result = bouncer.asleep(10, dbname="p1", times=8 * thread_number)
+        result = bouncer.asleep(10, dbname="p1", times=8 * worker_thread_counter)
         await asyncio.sleep(2)
-        assert pg.connection_count("p1") == 5 * thread_number
+        assert pg.connection_count("p1") == 5 * worker_thread_counter
         await asyncio.sleep(8)
-        assert pg.connection_count("p1") == 8 * thread_number
+        assert pg.connection_count("p1") == 8 * worker_thread_counter
         await result
 
 
 async def test_user_reserve_pool_size(pg, bouncer):
-    thread_number = bouncer.get_thread_number()
+    worker_thread_counter = bouncer.get_worker_thread_count()
     bouncer.admin("set reserve_pool_timeout = 2")
 
     # Disable tls to get more consistent timings
     bouncer.admin("set server_tls_sslmode = disable")
 
     with bouncer.log_contains(
-        "taking connection from reserve_pool", times=2 * thread_number
+        "taking connection from reserve_pool", times=2 * worker_thread_counter
     ):
         # respoolsize1 user has a pool_size of 1 and reserve_pool_size of 2
         # this means 1 connection should happen immediately while 2 out of
         # the 3 remaining connections happen after reserve_pool_timeout
         result = bouncer.asleep(
-            10, dbname="p0a", user="respoolsize1", times=4 * thread_number
+            10, dbname="p0a", user="respoolsize1", times=4 * worker_thread_counter
         )
         await asyncio.sleep(1)
         assert (
             pg.connection_count(dbname="p0", users=("respoolsize1",))
-            == 1 * thread_number
+            == 1 * worker_thread_counter
         )
         await asyncio.sleep(8)
         assert (
             pg.connection_count(dbname="p0", users=("respoolsize1",))
-            == 3 * thread_number
+            == 3 * worker_thread_counter
         )
         await result
 
 
 async def test_database_reserve_pool_size(pg, bouncer):
-    thread_number = bouncer.get_thread_number()
+    worker_thread_counter = bouncer.get_worker_thread_count()
     bouncer.admin("set reserve_pool_timeout = 2")
 
     # Disable tls to get more consistent timings
     bouncer.admin("set server_tls_sslmode = disable")
-    bouncer.admin(f"set max_client_conn = {10*thread_number}")
+    bouncer.admin(f"set max_client_conn = {10*worker_thread_counter}")
     with bouncer.log_contains(
-        "taking connection from reserve_pool", times=2 * thread_number
+        "taking connection from reserve_pool", times=2 * worker_thread_counter
     ):
         # p0 db has a pool_size of 2 and reserve_pool_size of 2
         # this means 2 connections should happen immediately while 2 out of
         # the 3 remaining connections happen after reserve_pool_timeout
         result = bouncer.asleep(
-            10, dbname="p0", user="bouncer", times=5 * thread_number
+            10, dbname="p0", user="bouncer", times=5 * worker_thread_counter
         )
         await asyncio.sleep(1)
-        assert pg.connection_count(dbname="p0", users=("bouncer",)) == 2 * thread_number
+        assert (
+            pg.connection_count(dbname="p0", users=("bouncer",))
+            == 2 * worker_thread_counter
+        )
         await asyncio.sleep(8)
-        assert pg.connection_count(dbname="p0", users=("bouncer",)) == 4 * thread_number
+        assert (
+            pg.connection_count(dbname="p0", users=("bouncer",))
+            == 4 * worker_thread_counter
+        )
         await result
 
 
 async def test_database_reserve_pool_size_old_param(pg, bouncer):
-    thread_number = bouncer.get_thread_number()
+    worker_thread_counter = bouncer.get_worker_thread_count()
     bouncer.admin("set reserve_pool_timeout = 2")
 
     # Disable tls to get more consistent timings
     bouncer.admin("set server_tls_sslmode = disable")
 
     with bouncer.log_contains(
-        "taking connection from reserve_pool", times=2 * thread_number
+        "taking connection from reserve_pool", times=2 * worker_thread_counter
     ):
         # p0a db has a pool_size of 2 and reserve_pool of 2
         # this means 2 connections should happen immediately while 2 out of
         # the 3 remaining connections happen after reserve_pool_timeout
         result = bouncer.asleep(
-            10, dbname="p0a", user="bouncer", times=5 * thread_number
+            10, dbname="p0a", user="bouncer", times=5 * worker_thread_counter
         )
         await asyncio.sleep(1)
-        assert pg.connection_count(dbname="p0", users=("bouncer",)) == 2 * thread_number
+        assert (
+            pg.connection_count(dbname="p0", users=("bouncer",))
+            == 2 * worker_thread_counter
+        )
         await asyncio.sleep(8)
-        assert pg.connection_count(dbname="p0", users=("bouncer",)) == 4 * thread_number
+        assert (
+            pg.connection_count(dbname="p0", users=("bouncer",))
+            == 4 * worker_thread_counter
+        )
         await result
 
 

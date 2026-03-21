@@ -12,9 +12,9 @@ async def test_load_balance_hosts_disable_good_first(bouncer):
 async def test_load_balance_hosts_disable_bad_first(bouncer):
     bouncer.admin(f"set server_login_retry=1")
     # In multithread mode, each thread tries the bad host independently,
-    # so we expect min(thread_number, 2) DNS lookup failures (we only create 2 connections)
-    thread_number = bouncer.get_thread_number()
-    expected_failures = min(thread_number, 2)
+    # so we expect min(worker_thread_counter, 2) DNS lookup failures (we only create 2 connections)
+    worker_thread_counter = bouncer.get_worker_thread_count()
+    expected_failures = min(worker_thread_counter, 2)
     with bouncer.log_contains(
         r"closing because: server DNS lookup failed", expected_failures
     ):

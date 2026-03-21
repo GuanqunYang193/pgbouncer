@@ -17,7 +17,6 @@
  */
 
 #include "bouncer.h"
-#include "multithread.h"
 
 #include <usual/netdb.h>
 #include <usual/socket.h>
@@ -759,7 +758,6 @@ loop:
 	el = list_pop(&req->ucb_list);
 	if (!el)
 		return;
-
 	ucb = container_of(el, struct DNSToken, node);
 
 	/* launch callback */
@@ -769,6 +767,7 @@ loop:
 		     ai ? ai->ai_addr : NULL,
 		     ai ? ai->ai_addrlen : 0);
 	free(ucb);
+
 	/* scroll req list */
 	if (ai) {
 		req->current = ai->ai_next;
@@ -854,6 +853,7 @@ struct DNSToken *adns_resolve(struct DNSContext *ctx, const char *name, adns_cal
 	struct DNSRequest *req;
 	struct DNSToken *ucb;
 	struct AANode *node;
+
 	/* setup actual lookup */
 	node = aatree_search(&ctx->req_tree, (uintptr_t)name);
 	if (node) {
@@ -879,6 +879,7 @@ struct DNSToken *adns_resolve(struct DNSContext *ctx, const char *name, adns_cal
 		ctx->active++;
 		impl_launch_query(req);
 	}
+
 	/* remember user callback */
 	ucb = calloc(1, sizeof(*ucb));
 	if (!ucb)
@@ -1085,13 +1086,14 @@ static void zone_timer(evutil_socket_t fd, short flg, void *arg)
 static void launch_zone_timer(struct DNSContext *ctx)
 {
 	struct timeval tv;
-	MultithreadEventArgs *ev_args;
+	WorkerEventArgs *ev_args;
 
 	tv.tv_sec = cf_dns_zone_check_period / USEC;
 	tv.tv_usec = cf_dns_zone_check_period % USEC;
-	ev_args = malloc(sizeof(MultithreadEventArgs));
-	setup_multithread_event_args(ev_args, &ctx, zone_timer, false, &adns_lock);
-	evtimer_assign(&ctx->ev_zone_timer, pgb_event_base, multithread_event_wrapper, ev_args);
+
+	ev_args = malloc(sizeof(WorkerEventArgs));
+	init_worker_event_args(ev_args, &ctx, zone_timer, false, &adns_lock);
+	evtimer_assign(&ctx->ev_zone_timer, pgb_event_base, worker_thread_event_wrapper, ev_args);
 	safe_evtimer_add(&ctx->ev_zone_timer, &tv);
 
 	ctx->zone_state = 2;

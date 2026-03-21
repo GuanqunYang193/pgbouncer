@@ -61,7 +61,7 @@ async def test_notify_queue_negative(bouncer):
     Test that wait notification will not occur when query_wait_notify
     is set to longer than the client will be waiting in the queue for.
     """
-    thread_num = bouncer.get_thread_number()
+    worker_thread_count = bouncer.get_worker_thread_count()
     config = f"""
     [databases]
     postgres = host={bouncer.pg.host} port={bouncer.pg.port}
@@ -77,7 +77,7 @@ async def test_notify_queue_negative(bouncer):
     query_wait_notify = 8
 
     [users]
-    puser1 = max_user_connections={thread_num}
+    puser1 = max_user_connections={worker_thread_count}
     """
     notices_received = []
 
@@ -86,7 +86,7 @@ async def test_notify_queue_negative(bouncer):
 
     with bouncer.run_with_config(config):
 
-        for _ in range(bouncer.get_thread_number()):
+        for _ in range(bouncer.get_worker_thread_count()):
             sleep_future = bouncer.asql(
                 "SELECT pg_sleep(6)", dbname="postgres", user="puser1"
             )
@@ -101,7 +101,7 @@ async def test_notify_queue_negative(bouncer):
 
         assert len(notices_received) == 0
 
-        for _ in range(bouncer.get_thread_number()):
+        for _ in range(bouncer.get_worker_thread_count()):
             sleep_future = bouncer.asql(
                 "SELECT pg_sleep(6)", dbname="postgres", user="puser1"
             )
@@ -121,7 +121,7 @@ async def test_notify_queue(bouncer):
     is correctly sent if they are waiting in a second time during the
     same connection.
     """
-    thread_num = bouncer.get_thread_number()
+    worker_thread_count = bouncer.get_worker_thread_count()
     config = f"""
     [databases]
     postgres = host={bouncer.pg.host} port={bouncer.pg.port}
@@ -137,7 +137,7 @@ async def test_notify_queue(bouncer):
     query_wait_notify = 2
 
     [users]
-    puser1 = max_user_connections={thread_num}
+    puser1 = max_user_connections={worker_thread_count}
     """
     notices_received = []
 
@@ -146,7 +146,7 @@ async def test_notify_queue(bouncer):
 
     with bouncer.run_with_config(config):
 
-        for _ in range(bouncer.get_thread_number()):
+        for _ in range(bouncer.get_worker_thread_count()):
             sleep_future = bouncer.asql(
                 "SELECT pg_sleep(6)", dbname="postgres", user="puser1"
             )
@@ -165,7 +165,7 @@ async def test_notify_queue(bouncer):
         )
         assert expected_message == notices_received[0]
 
-        for _ in range(bouncer.get_thread_number()):
+        for _ in range(bouncer.get_worker_thread_count()):
             sleep_future = bouncer.asql(
                 "SELECT pg_sleep(6)", dbname="postgres", user="puser1"
             )
@@ -311,8 +311,8 @@ def test_server_check_query_default(
 
         # Multithread mode requires this because we want pg_backend_pid()
         # to be executed on the same thread.
-        # -2 because get_thread_number also uses one connection.
-        for _ in range(bouncer.get_thread_number() - 2):
+        # -2 because get_worker_thread_counter also uses one connection.
+        for _ in range(bouncer.get_worker_thread_count() - 2):
             with bouncer.cur(dbname="postgres", user="puser1") as cur:
                 cur.execute("SELECT 1")
 
@@ -359,8 +359,8 @@ def test_server_check_query(pg, bouncer):
 
         # Multithread mode requires this because we want pg_backend_pid()
         # to be executed on the same thread.
-        # -2 because get_thread_number also uses one connection.
-        for _ in range(bouncer.get_thread_number() - 2):
+        # -2 because get_worker_thread_counter also uses one connection.
+        for _ in range(bouncer.get_worker_thread_count() - 2):
             with bouncer.cur(dbname="postgres", user="puser1") as cur:
                 cur.execute("SELECT 1")
 
@@ -480,14 +480,14 @@ def test_auto_database(bouncer):
 # non-empty.
 @pytest.mark.skipif("not HAVE_IPV6_LOCALHOST")
 async def test_host_list(bouncer):
-    thread_number = bouncer.get_thread_number()
+    worker_thread_counter = bouncer.get_worker_thread_count()
     with bouncer.log_contains(
-        r"new connection to server \(from 127.0.0.1", times=thread_number
+        r"new connection to server \(from 127.0.0.1", times=worker_thread_counter
     ):
         with bouncer.log_contains(
-            r"new connection to server \(from \[::1\]", times=thread_number
+            r"new connection to server \(from \[::1\]", times=worker_thread_counter
         ):
-            await bouncer.asleep(1, dbname="hostlist1", times=2 * thread_number)
+            await bouncer.asleep(1, dbname="hostlist1", times=2 * worker_thread_counter)
 
 
 # This is the same test as above, except it doesn't use any IPv6
@@ -693,8 +693,8 @@ async def test_already_paused_client_during_wait_for_servers_shutdown(bouncer):
     bouncer.admin(f"set default_pool_size=1")
     bouncer.default_db = "p1"
     with bouncer.transaction() as cur1:
-        # -2 because get_thread_number also uses one connection.
-        for _ in range(bouncer.get_thread_number() - 2):
+        # -2 because get_worker_thread_counter also uses one connection.
+        for _ in range(bouncer.get_worker_thread_count() - 2):
             await bouncer.aconn()
 
         conn2 = await bouncer.aconn()
@@ -732,7 +732,7 @@ def test_shutdown_wait_for_servers(bouncer):
 
     socket_directory = bouncer.config_dir if LINUX else "/tmp"
 
-    num_threads = bouncer.get_thread_number()
+    num_threads = bouncer.get_worker_thread_count()
     cursors = []
     threads = []
 
@@ -860,22 +860,26 @@ def test_issue_1104(bouncer):
 
 
 @pytest.mark.single_thread_only
-def test_get_single_thread_number(bouncer):
+def test_get_single_worker_thread_counter(bouncer):
     """
-    Test the get_thread_number() helper method.
+    Test the get_worker_thread_count() helper method.
     This is a utility method that returns the number of threads
     PgBouncer is configured to run with.
     """
-    thread_num = bouncer.get_thread_number()
-    assert thread_num == 1, f"Expected at least 1 thread, got {thread_num}"
+    worker_thread_count = bouncer.get_worker_thread_count()
+    assert (
+        worker_thread_count == 1
+    ), f"Expected at least 1 thread, got {worker_thread_count}"
 
 
 @pytest.mark.multithread_only
-def test_get_multithread_number(bouncer):
+def test_get_multiworker_thread_counter(bouncer):
     """
-    Test the get_thread_number() helper method.
+    Test the get_worker_thread_count() helper method.
     This is a utility method that returns the number of threads
     PgBouncer is configured to run with.
     """
-    thread_num = bouncer.get_thread_number()
-    assert thread_num == 2, f"Expected at least 2 threads, got {thread_num}"
+    worker_thread_count = bouncer.get_worker_thread_count()
+    assert (
+        worker_thread_count == 2
+    ), f"Expected at least 2 threads, got {worker_thread_count}"

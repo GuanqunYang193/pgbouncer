@@ -21,8 +21,6 @@
  */
 
 #include "bouncer.h"
-#include "usual/time.h"
-#include "multithread.h"
 
 #include <usual/fileutil.h>
 #include <usual/string.h>
@@ -245,7 +243,6 @@ fail:
 	free(host);
 	return false;
 }
-
 /* fill PgDatabase from connstr */
 bool parse_database(void *base, const char *name, const char *connstr)
 {
@@ -378,6 +375,7 @@ bool parse_database(void *base, const char *name, const char *connstr)
 		log_error("cannot create database, no memory?");
 		goto fail;
 	}
+
 	/* tag the db as alive */
 	db->db_dead = false;
 	/* assuming not an autodb */
@@ -488,16 +486,6 @@ bool parse_database(void *base, const char *name, const char *connstr)
 	/* remember dbname */
 	db->dbname = (char *)msg->buf + dbname_ofs;
 
-	/* Only set per-database limits once when a database is first added. Also
-	 * use info-level logging instead of error-level to avoid spamming logs on
-	 * reloads where parse_database may run multiple times for existing DBs.
-	 * Use db->name (pgbouncer database name) for consistency with runtime limit access.
-	 */
-	if (multithread_mode) {
-		multithread_set_limit(db->name, &db_connection_limits, &db_connection_limits_lock, max_db_connections);
-		multithread_set_limit(db->name, &db_client_connection_limits, &db_client_connection_limits_lock, max_db_client_connections);
-	}
-
 	free(tmp_connstr);
 	return true;
 fail:
@@ -571,8 +559,8 @@ bool parse_user(void *base, const char *name, const char *connstr)
 			goto fail;
 		}
 	}
-	user = find_or_add_new_global_user(name, "");
 
+	user = find_or_add_new_global_user(name, "");
 	if (!user) {
 		log_error("cannot create user, no memory?");
 		goto fail;
@@ -643,7 +631,6 @@ static void unquote_add_authfile_user(const char *username, const char *password
 		log_warning("cannot create user, no memory");
 		return;
 	}
-
 	if (strcmp(user->credentials.passwd, real_passwd) != 0) {
 		user = update_global_user_passwd(user, real_passwd);
 	}
@@ -698,7 +685,8 @@ bool loader_users_check(void)
 static void disable_users(void)
 {
 	struct List *item;
-	THREAD_SAFE_STATLIST_EACH(&thread_safe_user_list, item, {
+
+	THREAD_SAFE_STATLIST_EACH(&user_list, item, {
 		PgGlobalUser *user = container_of(item, PgGlobalUser, head);
 		user->credentials.passwd[0] = 0;
 	});
@@ -721,6 +709,7 @@ bool load_auth_file(const char *fn)
 
 	log_debug("loading auth_file: \"%s\"", fn);
 	disable_users();
+
 	p = buf;
 	while (*p) {
 		/* skip whitespace and empty lines */

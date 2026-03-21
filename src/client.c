@@ -21,7 +21,6 @@
  */
 
 #include "bouncer.h"
-#include "multithread.h"
 #include "pam.h"
 #include "scram.h"
 #include "common/builtins.h"
@@ -460,15 +459,6 @@ static bool finish_set_pool(PgSocket *client, bool takeover)
 	return ok;
 }
 
-static int get_client_connection_count(PgDatabase *db)
-{
-	if (multithread_mode) {
-		return multithread_get_limit_count(db->name, &db_client_connection_limits, &db_client_connection_limits_lock);
-	} else {
-		return db->connection_count;
-	}
-}
-
 bool check_db_connection_count(PgSocket *client)
 {
 	int max_client_connections;
@@ -476,15 +466,14 @@ bool check_db_connection_count(PgSocket *client)
 
 	if (!client->contributes_db_client_count) {
 		client->contributes_db_client_count = true;
-		client->db->client_connection_count++;
-		multithread_increase_limit_count(client->db->name, &db_client_connection_limits, &db_client_connection_limits_lock);
+		WITH_LOCK(&client->db->lock, { client->db->client_connection_count++; });
 	}
 	max_client_connections = database_max_client_connections(client->db);
 	if (max_client_connections <= 0)
 		return true;
 
-	client_connection_count = get_client_connection_count(client->db);
-	if (client->db->client_connection_count <= max_client_connections)
+	WITH_LOCK(&client->db->lock, { client_connection_count = client->db->client_connection_count; });
+	if (client_connection_count <= max_client_connections)
 		return true;
 
 	if (client->db->admin && strlist_contains(cf_admin_users, client->login_user_credentials->name))
@@ -510,7 +499,7 @@ bool check_user_connection_count(PgSocket *client)
 		return true;
 
 	if (!client->user_connection_counted) {
-		MULTITHREAD_VISIT(&client->login_user_credentials->global_user->lock, {
+		WITH_LOCK(&client->login_user_credentials->global_user->lock, {
 			client->login_user_credentials->global_user->client_connection_count++;
 		});
 		client->user_connection_counted = 1;
@@ -520,12 +509,12 @@ bool check_user_connection_count(PgSocket *client)
 		return true;
 	}
 
-	MULTITHREAD_VISIT(&client->login_user_credentials->global_user->lock, {
+	WITH_LOCK(&client->login_user_credentials->global_user->lock, {
 		max_user_client_connections = user_client_max_connections(client->login_user_credentials->global_user);
 	});
 	if (max_user_client_connections == 0)
 		return true;
-	MULTITHREAD_VISIT(&client->login_user_credentials->global_user->lock, {
+	WITH_LOCK(&client->login_user_credentials->global_user->lock, {
 		client_connection_count = client->login_user_credentials->global_user->client_connection_count;
 	});
 	if (client_connection_count <= max_user_client_connections)
@@ -559,6 +548,7 @@ bool set_pool(PgSocket *client, const char *dbname, const char *username, const 
 	client->db = find_or_register_database(client, dbname);
 	if (!client->db) {
 		client->db = calloc(1, sizeof(*client->db));
+		spin_lock_init(&client->db->lock, true);
 		client->db->fake = true;
 		strlcpy(client->db->name, dbname, sizeof(client->db->name));
 	}
@@ -1451,7 +1441,7 @@ static bool handle_client_startup(PgSocket *client, PktHdr *pkt)
 	if (client->packet_cb_state.flag != CB_HANDLE_COMPLETE_PACKET) {
 		sbuf_prepare_skip(sbuf, pkt->len);
 	}
-	client->request_time = get_multithread_time_with_id(thread_id);
+	client->request_time = get_worker_thread_time(thread_id);
 	return true;
 }
 
@@ -1622,7 +1612,7 @@ static bool handle_client_work(PgSocket *client, PktHdr *pkt)
 	/* update stats */
 	if (!client->query_start) {
 		client->pool->stats.query_count++;
-		client->query_start = get_multithread_time_with_id(client->sbuf.thread_id);
+		client->query_start = get_worker_thread_time(client->sbuf.thread_id);
 	}
 
 	/* remember timestamp of the first query in a transaction */
@@ -1796,7 +1786,7 @@ bool client_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 			return false;
 		}
 
-		client->request_time = get_multithread_time_with_id(thread_id);
+		client->request_time = get_worker_thread_time(thread_id);
 		if (expect_startup_packet(client)) {
 			res = handle_client_startup(client, &pkt);
 		} else {

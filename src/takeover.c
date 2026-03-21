@@ -26,7 +26,6 @@
  */
 
 #include "bouncer.h"
-#include "multithread.h"
 
 #include <usual/safeio.h>
 
@@ -102,7 +101,7 @@ static void takeover_load_fd(struct MBuf *pkt, const struct cmsghdr *cmsg)
 	int got;
 	uint64_t ckey;
 	PgAddr addr;
-	int thread_id = -1;
+	int thread_id = 0;
 	bool res = false;
 
 	memset(&addr, 0, sizeof(addr));
@@ -146,7 +145,7 @@ static void takeover_load_fd(struct MBuf *pkt, const struct cmsghdr *cmsg)
 		if (!pga_pton(&addr, saddr, port))
 			fatal("failed to convert address: %s", saddr);
 	}
-	thread_id = get_current_thread_id();
+	thread_id = get_current_worker_thread_id();
 	/* decide what to do with it */
 	if (strcmp(task, "client") == 0) {
 		res = use_client_socket(fd, &addr, db, user, ckey, oldfd, linkfd,
@@ -213,7 +212,7 @@ static void takeover_postprocess_fds(void)
 		log_error("takeover_postprocess_fds: multithread mode not supported");
 		return;
 	}
-	THREAD_SAFE_STATLIST_EACH(&pool_list, item, {
+	THREAD_SAFE_STATLIST_EACH(&workers[0].pool_list, item, {
 		pool = container_of(item, PgPool, head);
 		if (pool->db->admin)
 			continue;
@@ -223,7 +222,7 @@ static void takeover_postprocess_fds(void)
 				takeover_create_link(pool, client);
 		}
 	});
-	THREAD_SAFE_STATLIST_EACH(&pool_list, item, {
+	THREAD_SAFE_STATLIST_EACH(&workers[0].pool_list, item, {
 		pool = container_of(item, PgPool, head);
 		takeover_clean_socket_list(&pool->active_client_list);
 		takeover_clean_socket_list(&pool->active_server_list);
@@ -362,6 +361,7 @@ bool takeover_login(PgSocket *bouncer)
 	}
 	return res;
 }
+
 /* launch connection to running process */
 void takeover_init(void)
 {
@@ -374,7 +374,7 @@ void takeover_init(void)
 
 	db = find_database("pgbouncer");
 	if (db)
-		pool = get_pool(db, db->forced_user_credentials, -1);
+		pool = get_pool(db, db->forced_user_credentials, 0);
 
 	if (!pool)
 		fatal("no admin pool?");

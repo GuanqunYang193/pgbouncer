@@ -21,8 +21,6 @@
  */
 
 #include "bouncer.h"
-#include "usual/time.h"
-#include "multithread.h"
 
 #include <usual/slab.h>
 
@@ -278,7 +276,7 @@ int probably_wrong_pool_pool_mode(PgPool *pool)
 int pool_pool_size(PgPool *pool)
 {
 	int user_pool_size;
-	MULTITHREAD_VISIT(&user_lock, {
+	WITH_LOCK(&user_lock, {
 		user_pool_size = pool->user_credentials ? pool->user_credentials->global_user->pool_size : -1;
 	});
 	if (user_pool_size >= 0)
@@ -326,27 +324,16 @@ int pool_res_pool_size(PgPool *pool)
 
 int database_max_client_connections(PgDatabase *db)
 {
-	int max_db_client_connections;
-	if (multithread_mode) {
-		max_db_client_connections = multithread_get_limit(db->name, &db_client_connection_limits, &db_client_connection_limits_lock);
-	} else {
-		max_db_client_connections = db->max_db_client_connections;
-	}
+	int max_db_client_connections = db->max_db_client_connections;
 	if (max_db_client_connections <= 0)
 		return cf_max_db_client_connections;
 	else
 		return max_db_client_connections;
 }
 
-
 int database_max_connections(PgDatabase *db)
 {
-	int limit = -1;
-	if (multithread_mode) {
-		limit = multithread_get_limit(db->name, &db_connection_limits, &db_connection_limits_lock);
-	} else {
-		limit = db->max_db_connections;
-	}
+	int limit = db->max_db_connections;
 
 	if (limit <= 0)
 		return cf_max_db_connections;
@@ -381,16 +368,10 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 	bool async_response = false;
 	struct List *item, *tmp;
 	bool ignore_packet = false;
-	struct Slab *outstanding_request_cache_;
 	int thread_id = server->sbuf.thread_id;
+	struct Slab *outstanding_request_cache_ = workers[thread_id].outstanding_request_cache;
 
 	Assert(!server->pool->db->admin);
-
-	if (multithread_mode) {
-		outstanding_request_cache_ = threads[thread_id].outstanding_request_cache;
-	} else {
-		outstanding_request_cache_ = outstanding_request_cache;
-	}
 
 	switch (pkt->type) {
 	default:
@@ -607,7 +588,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 				if (ready || idle_tx) {
 					if (client->query_start) {
 						usec_t total;
-						total = get_multithread_time_with_id(thread_id) - client->query_start;
+						total = get_worker_thread_time(thread_id) - client->query_start;
 						client->query_start = 0;
 						server->pool->stats.query_time += total;
 						slog_debug(client, "query time: %d us", (int)total);
@@ -621,7 +602,7 @@ static bool handle_server_work(PgSocket *server, PktHdr *pkt)
 				if (ready) {
 					if (client->xact_start) {
 						usec_t total;
-						total = get_multithread_time_with_id(thread_id) - client->xact_start;
+						total = get_worker_thread_time(thread_id) - client->xact_start;
 						client->xact_start = 0;
 						server->pool->stats.xact_time += total;
 						slog_debug(client, "transaction time: %d us", (int)total);
@@ -811,7 +792,7 @@ bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 		}
 		slog_noise(server, "read pkt='%c', len=%u", pkt_desc(&pkt), pkt.len);
 
-		server->request_time = get_multithread_time_with_id(thread_id);
+		server->request_time = get_worker_thread_time(thread_id);
 		switch (server->state) {
 		case SV_LOGIN:
 			res = handle_server_startup(server, &pkt);
@@ -835,7 +816,7 @@ bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 	case SBUF_EV_CONNECT_OK:
 		slog_debug(server, "S: connect ok");
 		Assert(server->state == SV_LOGIN);
-		server->request_time = get_multithread_time_with_id(thread_id);
+		server->request_time = get_worker_thread_time(thread_id);
 		res = handle_connect(server);
 		break;
 	case SBUF_EV_FLUSH:
@@ -901,7 +882,7 @@ bool server_proto(SBuf *sbuf, SBufEvent evtype, struct MBuf *data)
 			slog_noise(server, "SSL established: %s", infobuf);
 		}
 
-		server->request_time = get_multithread_time_with_id(thread_id);
+		server->request_time = get_worker_thread_time(thread_id);
 		res = send_startup_packet(server);
 		if (res)
 			sbuf_continue(&server->sbuf);

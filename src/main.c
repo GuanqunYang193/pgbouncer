@@ -21,15 +21,12 @@
  */
 
 #include "bouncer.h"
-#include "multithread.h"
 
 #include <usual/signal.h>
 #include <usual/err.h>
-#include <usual/cfparser.h>
 #include <usual/getopt.h>
 #include <usual/safeio.h>
 #include <usual/slab.h>
-#include <usual/socket.h>
 #include <usual/string.h>
 
 #ifdef WIN32
@@ -212,7 +209,9 @@ int cf_max_prepared_statements;
 
 int cf_scram_iterations;
 
-int arg_thread_number = 0;
+int num_threads = 0;
+bool multithread_mode = false;
+static int cf_worker_thread_count = 0;	/* raw value from config file */
 /*
  * config file description
  */
@@ -356,7 +355,7 @@ static const struct CfKey bouncer_params [] = {
 	CF_ABS("tcp_keepcnt", CF_INT, cf_tcp_keepcnt, 0, "0"),
 	CF_ABS("tcp_keepidle", CF_INT, cf_tcp_keepidle, 0, "0"),
 	/* A placeholder to guarantee CF_NO_RELOAD */
-	CF_ABS("thread_number", CF_INT, arg_thread_number, CF_NO_RELOAD, "0"),
+	CF_ABS("worker_thread_count", CF_INT, cf_worker_thread_count, CF_NO_RELOAD, "0"),
 	CF_ABS("tcp_keepintvl", CF_INT, cf_tcp_keepintvl, 0, "0"),
 	CF_ABS("tcp_socket_buffer", CF_INT, cf_tcp_socket_buffer, 0, "0"),
 	CF_ABS("tcp_user_timeout", CF_INT, cf_tcp_user_timeout, 0, "0"),
@@ -452,11 +451,11 @@ static bool set_defer_accept(struct CfValue *cv, const char *val)
 	return ok;
 }
 
-
 static void set_dbs_dead(bool flag)
 {
 	struct List *item;
 	PgDatabase *db;
+
 	THREAD_SAFE_STATLIST_EACH(&database_list, item, {
 		db = container_of(item, PgDatabase, head);
 		if (db->admin)
@@ -498,8 +497,10 @@ bool load_config(void)
 	any_user_level_timeout_set = false;
 	empty_server_check_query = false;
 	any_user_level_client_timeout_set = false;
+
 	set_dbs_dead(true);
 	set_peers_dead(true);
+
 	/* actual loading */
 	load_file_ok = cf_load_file(&main_config, cf_config_file);
 	if (load_file_ok) {
@@ -553,7 +554,7 @@ bool load_config(void)
 	return ok;
 }
 
-/* Validate that connection limits are >= thread_number in multithread mode */
+/* Validate that connection limits are >= worker_thread_count in multithread mode */
 static bool validate_multithread_limits(void)
 {
 	struct List *item;
@@ -561,25 +562,24 @@ static bool validate_multithread_limits(void)
 	PgGlobalUser *user;
 	bool ok = true;
 
-	if (!multithread_mode || arg_thread_number <= 0)
+	if (!multithread_mode || num_threads <= 0)
 		return true;
 
 	/* Check global connection limits (not pool sizes) */
-	if (cf_max_client_conn > 0 && cf_max_client_conn < arg_thread_number) {
-		log_error("In multithread mode, max_client_conn (%d) must be >= thread_number (%d)",
-			  cf_max_client_conn, arg_thread_number);
+	if (cf_max_client_conn > 0 && cf_max_client_conn < num_threads) {
+		log_error("In multithread mode, max_client_conn (%d) must be >= worker_thread_count (%d)",
+			  cf_max_client_conn, num_threads);
 		ok = false;
 	}
 
-	if (cf_max_db_connections > 0 && cf_max_db_connections < arg_thread_number) {
-		log_error("In multithread mode, max_db_connections (%d) must be >= thread_number (%d)",
-			  cf_max_db_connections, arg_thread_number);
+	if (cf_max_db_connections > 0 && cf_max_db_connections < num_threads) {
+		log_error("In multithread mode, max_db_connections (%d) must be >= worker_thread_count (%d)",
+			  cf_max_db_connections, num_threads);
 		ok = false;
 	}
-
-	if (cf_max_user_connections > 0 && cf_max_user_connections < arg_thread_number) {
-		log_error("In multithread mode, max_user_connections (%d) must be >= thread_number (%d)",
-			  cf_max_user_connections, arg_thread_number);
+	if (cf_max_user_connections > 0 && cf_max_user_connections < num_threads) {
+		log_error("In multithread mode, max_user_connections (%d) must be >= worker_thread_count (%d)",
+			  cf_max_user_connections, num_threads);
 		ok = false;
 	}
 
@@ -587,20 +587,20 @@ static bool validate_multithread_limits(void)
 	THREAD_SAFE_STATLIST_EACH(&database_list, item, {
 		db = container_of(item, PgDatabase, head);
 
-		if (db->max_db_connections > 0 && db->max_db_connections < arg_thread_number) {
-			log_error("In multithread mode, database '%s' max_db_connections (%d) must be >= thread_number (%d)",
-				  db->name, db->max_db_connections, arg_thread_number);
+		if (db->max_db_connections > 0 && db->max_db_connections < num_threads) {
+			log_error("In multithread mode, database '%s' max_db_connections (%d) must be >= worker_thread_count (%d)",
+				  db->name, db->max_db_connections, num_threads);
 			ok = false;
 		}
 	});
 
 	/* Check per-user connection limits (not pool sizes) */
-	THREAD_SAFE_STATLIST_EACH(&thread_safe_user_list, item, {
+	THREAD_SAFE_STATLIST_EACH(&user_list, item, {
 		user = container_of(item, PgGlobalUser, head);
 
-		if (user->max_user_connections > 0 && user->max_user_connections < arg_thread_number) {
-			log_error("In multithread mode, user '%s' max_user_connections (%d) must be >= thread_number (%d)",
-				  user->credentials.name, user->max_user_connections, arg_thread_number);
+		if (user->max_user_connections > 0 && user->max_user_connections < num_threads) {
+			log_error("In multithread mode, user '%s' max_user_connections (%d) must be >= worker_thread_count (%d)",
+				  user->credentials.name, user->max_user_connections, num_threads);
 			ok = false;
 		}
 	});
@@ -739,7 +739,6 @@ static void write_pidfile(void)
 	atexit(remove_pidfile);
 }
 
-
 /* just print out max files, in the future may warn if something is off */
 static void check_limits(void)
 {
@@ -751,8 +750,7 @@ static void check_limits(void)
 	int total_users;
 
 	fd_count = cf_max_client_conn + 10;
-
-	total_users = thread_safe_statlist_count(&thread_safe_user_list);
+	total_users = thread_safe_statlist_count(&user_list);
 
 	log_noise("event: %d, SBuf: %d, PgSocket: %d, IOBuf: %d",
 		  (int)sizeof(struct event), (int)sizeof(SBuf),
@@ -824,7 +822,7 @@ static void main_loop_once(void)
 		per_loop_pooler_maint();
 	}
 	if (adns) {
-		MULTITHREAD_VISIT(&adns_lock, adns_per_loop(adns));
+		WITH_LOCK(&adns_lock, adns_per_loop(adns));
 	}
 }
 
@@ -835,6 +833,8 @@ static void takeover_part1(void)
 
 	evtmp = pgb_event_base;
 	pgb_event_base = event_base_new();
+	if (!multithread_mode)
+		workers[0].base = pgb_event_base;
 
 	if (!cf_unix_socket_dir || !*cf_unix_socket_dir)
 		die("cannot reboot if unix dir not configured");
@@ -856,6 +856,8 @@ static void takeover_part1(void)
 
 	event_base_free(pgb_event_base);
 	pgb_event_base = evtmp;
+	if (!multithread_mode)
+		workers[0].base = pgb_event_base;
 }
 
 static void dns_setup(void)
@@ -907,8 +909,6 @@ static void cleanup(void)
 	pktbuf_cleanup();
 
 	reset_logging();
-
-	// TODO thread cleaning
 
 	xfree(&global_username);
 	xfree(&cf_config_file);
@@ -970,7 +970,9 @@ int main(int argc, char *argv[])
 		{"thread", required_argument, NULL, 'T'},
 		{NULL, 0, NULL, 0}
 	};
+
 	setprogname(basename(argv[0]));
+
 	/* parse cmdline */
 	while ((c = getopt_long(argc, argv, "qvhdVRuT:", long_options, &long_idx)) != -1) {
 		switch (c) {
@@ -1024,23 +1026,24 @@ int main(int argc, char *argv[])
 	 */
 	atexit(cleanup);
 #endif
+
 	log_file_lock_init();
 	init_objects();
-
 	{
 		/* load pgbouncer section first*/
 		int load_file_ok = cf_load_file(&multithread_config, cf_config_file);
 		if (!load_file_ok)
 			die("cannot load pgbouncer config");
-		if (arg_thread_number <= 0) {
+		if (cf_worker_thread_count <= 0) {
 			multithread_mode = false;
+			num_threads = 1;
 		} else {
 			multithread_mode = true;
-			init_threads();
+			num_threads = cf_worker_thread_count;
 		}
 	}
-	if (multithread_mode)
-		init_objects_multithread();
+	/* Always initialise threads; in single-thread mode this creates workers[0]. */
+	init_worker_threads();
 	load_config();
 	main_config.loaded = true;
 
@@ -1051,6 +1054,7 @@ int main(int argc, char *argv[])
 	init_var_lookup(cf_track_extra_parameters);
 	init_caches();
 	logging_prefix_cb = log_socket_prefix;
+
 	if (!sbuf_tls_setup())
 		die("TLS setup failed");
 
@@ -1059,6 +1063,7 @@ int main(int argc, char *argv[])
 		free(global_username);
 		global_username = xstrdup(arg_username);
 	}
+
 	/* switch user is needed */
 	if (global_username && *global_username)
 		change_user(global_username);
@@ -1066,6 +1071,7 @@ int main(int argc, char *argv[])
 	/* disallow running as root */
 	if (getuid() == 0)
 		die("PgBouncer should not run as root");
+
 	admin_setup();
 	admin_regex_init();
 
@@ -1104,8 +1110,11 @@ int main(int argc, char *argv[])
 	srandom(time(NULL) ^ getpid());
 	if (!(pgb_event_base = event_base_new()))
 		die("event_base_new() failed");
+	/* In single-thread mode, workers[0].base must point to the main event base. */
+	if (!multithread_mode)
+		workers[0].base = pgb_event_base;
 	dns_setup();
-	signal_setup(pgb_event_base, &signal_event);
+	signal_setup_main(pgb_event_base, &signal_event);
 	stats_setup();
 
 	if (!multithread_mode) {
@@ -1115,6 +1124,7 @@ int main(int argc, char *argv[])
 	}
 	auth_ldap_init();
 	pam_init();
+
 	if (did_takeover) {
 		takeover_finish();
 	} else {
@@ -1129,15 +1139,14 @@ int main(int argc, char *argv[])
 
 	sd_notify(0, "READY=1");
 	if (multithread_mode)
-		start_threads();
+		start_worker_threads();
 
 	/* main loop */
 	while (cf_shutdown != SHUTDOWN_IMMEDIATE)
 		main_loop_once();
 
-
 	if (multithread_mode)
-		return wait_threads();
+		return join_worker_threads();
 
 	return 0;
 }

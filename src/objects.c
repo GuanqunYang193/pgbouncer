@@ -22,7 +22,6 @@
 
 #include "bouncer.h"
 #include "scram.h"
-#include "multithread.h"
 
 #include <usual/err.h>
 #include <usual/safeio.h>
@@ -30,15 +29,24 @@
 #include <usual/slab_ts.h>
 #include <usual/statlist_ts.h>
 
-#define MAX_SLAB_NAME 64
+/*
+ * Array of per-worker state, one entry per event-loop worker thread.
+ * Allocated and initialized in init_worker_threads() before any worker starts.
+ *
+ * In single-thread mode this array has exactly one entry (workers[0]),
+ * which holds the main thread's event base, slab caches, and connection
+ * lists — the same data that worker threads own in multithread mode.
+ * Keeping a single-element array avoids sprinkling "if (multithread_mode)"
+ * guards throughout the codebase: all code that touches per-worker state
+ * simply indexes workers[get_current_worker_thread_id()].
+ */
+Worker *workers;
 
 /* those items will be allocated as needed, never freed */
-struct ThreadSafeStatList thread_safe_user_list;
+struct ThreadSafeStatList user_list;
 struct ThreadSafeStatList database_list;
 struct ThreadSafeStatList autodatabase_idle_list;
-struct ThreadSafeStatList pool_list;
 struct ThreadSafeStatList peer_list;
-struct ThreadSafeStatList peer_pool_list;
 
 /* All locally defined users (in auth_file) are kept here. */
 struct AATree user_tree;
@@ -67,36 +75,12 @@ PgPreparedStatement *prepared_statements = NULL;
 
 SpinLock prepared_statements_lock;
 
-/*
- * client and server objects will be pre-allocated
- * they are always in either active or free lists
- * in addition to others.
- */
-STATLIST(login_client_list);
-
-struct Slab *server_cache;
-struct Slab *client_cache;
 struct ThreadSafeSlab *db_cache;
 struct Slab *peer_cache;
-struct Slab *peer_pool_cache;
-struct Slab *pool_cache;
-struct ThreadSafeSlab *thread_safe_user_cache;
-struct ThreadSafeSlab *thread_safe_credentials_cache;
-struct Slab *iobuf_cache;
-struct Slab *outstanding_request_cache;
-struct Slab *var_list_cache;
-struct Slab *server_prepared_statement_cache;
+struct ThreadSafeSlab *user_cache;
+struct ThreadSafeSlab *credentials_cache;
 unsigned long long int last_pgsocket_id;
 static SpinLock pgsocket_id_lock;
-
-/*
- * libevent may still report events when event_del()
- * is called from somewhere else.  So hide just freed
- * PgSockets for one loop.
- */
-static STATLIST(justfree_client_list);
-static STATLIST(justfree_server_list);
-
 
 const char *replication_type_parameters[] = {
 	[REPLICATION_NONE] = "no",
@@ -104,27 +88,24 @@ const char *replication_type_parameters[] = {
 	[REPLICATION_PHYSICAL] = "yes",
 };
 
-
 int get_active_client_count(void)
 {
-	int thread_id = get_current_thread_id();
-	return slab_active_count(GET_MULTITHREAD_VAR(client_cache, thread_id));
+	int thread_id = get_current_worker_thread_id();
+	return slab_active_count(WORKER_THREAD_VAR(client_cache, thread_id));
 }
 
 int get_active_server_count(void)
 {
-	int thread_id = get_current_thread_id();
-	return slab_active_count(GET_MULTITHREAD_VAR(server_cache, thread_id));
+	int thread_id = get_current_worker_thread_id();
+	return slab_active_count(WORKER_THREAD_VAR(server_cache, thread_id));
 }
 
 /* fast way to get number of active clients */
 int get_total_active_client_count(void)
 {
-	int total_count_from_all_threads;
-	if (!multithread_mode)
-		return slab_active_count(client_cache);
-	MULTITHREAD_VISIT(&client_count_lock, { total_count_from_all_threads = client_count; });
-	return total_count_from_all_threads;
+	int total;
+	WITH_LOCK(&client_count_lock, { total = client_count; });
+	return total;
 }
 
 static void construct_client(void *obj)
@@ -133,17 +114,17 @@ static void construct_client(void *obj)
 	int thread_id;
 	struct Slab *var_list_cache_ptr;
 	memset(client, 0, sizeof(PgSocket));
-	thread_id = get_current_thread_id();
+	thread_id = get_current_worker_thread_id();
 	list_init(&client->head);
 	sbuf_init(&client->sbuf, client_proto);
 
-	var_list_cache_ptr = GET_MULTITHREAD_VAR(var_list_cache, thread_id);
+	var_list_cache_ptr = WORKER_THREAD_VAR(var_list_cache, thread_id);
 
 	client->vars.var_list = slab_alloc(var_list_cache_ptr);
 	client->state = CL_FREE;
 	client->client_prepared_statements = NULL;
 
-	MULTITHREAD_VISIT(&pgsocket_id_lock, { client->id = ++last_pgsocket_id; });
+	WITH_LOCK(&pgsocket_id_lock, { client->id = ++last_pgsocket_id; });
 }
 
 static void construct_server(void *obj)
@@ -155,8 +136,8 @@ static void construct_server(void *obj)
 	list_init(&server->head);
 	sbuf_init(&server->sbuf, server_proto);
 
-	thread_id = get_current_thread_id();
-	var_list_cache_ptr = GET_MULTITHREAD_VAR(var_list_cache, thread_id);
+	thread_id = get_current_worker_thread_id();
+	var_list_cache_ptr = WORKER_THREAD_VAR(var_list_cache, thread_id);
 
 	server->vars.var_list = slab_alloc(var_list_cache_ptr);
 
@@ -165,7 +146,7 @@ static void construct_server(void *obj)
 	server->host = NULL;
 	statlist_init(&server->outstanding_requests, "outstanding_requests");
 
-	MULTITHREAD_VISIT(&pgsocket_id_lock, { server->id = ++last_pgsocket_id; });
+	WITH_LOCK(&pgsocket_id_lock, { server->id = ++last_pgsocket_id; });
 }
 
 /* compare string with PgGlobalUser->credentials.name, for usage with btree */
@@ -188,16 +169,14 @@ static int credentials_node_cmp(uintptr_t userptr, struct AANode *node)
 static void credentials_node_release(struct AANode *node, void *arg)
 {
 	PgCredentials *user = container_of(node, PgCredentials, tree_node);
-	thread_safe_slab_free(thread_safe_credentials_cache, user);
+	thread_safe_slab_free(credentials_cache, user);
 }
 
 /* initialization before config loading */
 void init_objects(void)
 {
-	thread_safe_statlist_init(&thread_safe_user_list, "thread_safe_user_list", true);
+	thread_safe_statlist_init(&user_list, "user_list", true);
 	thread_safe_statlist_init(&peer_list, "peer_list", true);
-	thread_safe_statlist_init(&peer_pool_list, "peer_pool_list", true);
-	thread_safe_statlist_init(&pool_list, "pool_list", true);
 	thread_safe_statlist_init(&database_list, "database_list", true);
 	thread_safe_statlist_init(&autodatabase_idle_list, "autodatabase_idle_list", true);
 	thread_safe_statlist_init(&sock_list, "socket_list", true);
@@ -207,52 +186,14 @@ void init_objects(void)
 	spin_lock_init(&pam_user_tree_lock, true);
 	spin_lock_init(&user_lock, true);
 	spin_lock_init(&pgsocket_id_lock, true);
-	thread_safe_user_cache = thread_safe_slab_create("thread_safe_user_cache", sizeof(PgGlobalUser), 0, NULL, USUAL_ALLOC, true);
-	thread_safe_credentials_cache = thread_safe_slab_create("thread_safe_credentials_cache", sizeof(PgCredentials), 0, NULL, USUAL_ALLOC, true);
+	user_cache = thread_safe_slab_create("user_cache", sizeof(PgGlobalUser), 0, NULL, USUAL_ALLOC, true);
+	credentials_cache = thread_safe_slab_create("credentials_cache", sizeof(PgCredentials), 0, NULL, USUAL_ALLOC, true);
 	db_cache = thread_safe_slab_create("db_cache", sizeof(PgDatabase), 0, NULL, USUAL_ALLOC, true);
+	/* Peers are managed only on the main thread; a regular (non-thread-safe) slab is sufficient. */
+	peer_cache = slab_create("peer_cache", sizeof(PgDatabase), 0, NULL, USUAL_ALLOC);
 
-	if (!thread_safe_credentials_cache || !thread_safe_user_cache || !db_cache)
+	if (!credentials_cache || !user_cache || !db_cache || !peer_cache)
 		fatal("cannot create initial caches");
-
-	if (!multithread_mode) {
-		peer_cache = slab_create("peer_cache", sizeof(PgDatabase), 0, NULL, USUAL_ALLOC);
-		peer_pool_cache = slab_create("peer_pool_cache", sizeof(PgPool), 0, NULL, USUAL_ALLOC);
-		pool_cache = slab_create("pool_cache", sizeof(PgPool), 0, NULL, USUAL_ALLOC);
-		outstanding_request_cache = slab_create("outstanding_request_cache", sizeof(OutstandingRequest), 0, NULL, USUAL_ALLOC);
-
-		if (!peer_cache || !peer_pool_cache || !pool_cache || !outstanding_request_cache)
-			fatal("cannot create initial caches");
-	}
-}
-
-/* initialization object for multithread mode*/
-void init_objects_multithread(void)
-{
-	FOR_EACH_THREAD(thread_id){
-		char pool_cache_name[MAX_SLAB_NAME];
-		char peer_pool_cache_name[MAX_SLAB_NAME];
-		char outstanding_request_cache_name[MAX_SLAB_NAME];
-
-		snprintf(pool_cache_name, MAX_SLAB_NAME, "pool_cache_t%d", thread_id);
-		snprintf(peer_pool_cache_name, MAX_SLAB_NAME, "peer_pool_cache_t%d", thread_id);
-		snprintf(outstanding_request_cache_name, MAX_SLAB_NAME, "outstanding_request_cache_t%d", thread_id);
-
-		threads[thread_id].pool_cache = slab_create(pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
-		threads[thread_id].peer_pool_cache = slab_create(peer_pool_cache_name, sizeof(PgPool), 0, NULL, USUAL_ALLOC);
-		threads[thread_id].outstanding_request_cache = slab_create(outstanding_request_cache_name, sizeof(OutstandingRequest), 0, NULL, USUAL_ALLOC);
-
-		if (!threads[thread_id].pool_cache)
-			fatal("cannot create initial pool_cache");
-
-		if (!threads[thread_id].peer_pool_cache)
-			fatal("cannot create initial peer_pool_cache");
-
-		if (!threads[thread_id].outstanding_request_cache)
-			fatal("cannot create initial outstanding_request_cache");
-	}
-
-	spin_lock_init(&client_count_lock, true);
-	spin_lock_init(&total_active_count_lock, true);
 }
 
 static void do_iobuf_reset(void *arg)
@@ -264,38 +205,18 @@ static void do_iobuf_reset(void *arg)
 /* initialization after config loading */
 void init_caches(void)
 {
-	if (multithread_mode) {
-		init_caches_multithread();
-		return;
-	}
-	server_cache = slab_create("server_cache", sizeof(PgSocket), 0, construct_server, USUAL_ALLOC);
-	client_cache = slab_create("client_cache", sizeof(PgSocket), 0, construct_client, USUAL_ALLOC);
-	iobuf_cache = slab_create("iobuf_cache", IOBUF_SIZE, 0, do_iobuf_reset, USUAL_ALLOC);
-	var_list_cache = slab_create("var_list_cache", sizeof(struct PStr *) * get_num_var_cached(), 0, NULL, USUAL_ALLOC);
-	server_prepared_statement_cache = slab_create("server_prepared_statement_cache", sizeof(PgServerPreparedStatement), 0, NULL, USUAL_ALLOC);
-}
-
-/* initialization caches for multithread*/
-void init_caches_multithread(void)
-{
-	FOR_EACH_THREAD(thread_id){
-		char server_cache_name[MAX_SLAB_NAME];
-		char client_cache_name[MAX_SLAB_NAME];
-		char iobuf_cache_name[MAX_SLAB_NAME];
-		char var_list_cache_name[MAX_SLAB_NAME];
-		char server_prepared_statement_cache_name[MAX_SLAB_NAME];
-
-		snprintf(server_cache_name, MAX_SLAB_NAME, "server_cache_thread_%d", thread_id);
-		snprintf(client_cache_name, MAX_SLAB_NAME, "client_cache_thread_%d", thread_id);
-		snprintf(iobuf_cache_name, MAX_SLAB_NAME, "iobuf_cache_thread_%d", thread_id);
-		snprintf(var_list_cache_name, MAX_SLAB_NAME, "var_list_cache_thread_%d", thread_id);
-		snprintf(server_prepared_statement_cache_name, MAX_SLAB_NAME, "server_prepared_statement_cache_thread_%d", thread_id);
-
-		threads[thread_id].server_cache = slab_create(server_cache_name, sizeof(PgSocket), 0, construct_server, USUAL_ALLOC);
-		threads[thread_id].client_cache = slab_create(client_cache_name, sizeof(PgSocket), 0, construct_client, USUAL_ALLOC);
-		threads[thread_id].iobuf_cache = slab_create(iobuf_cache_name, IOBUF_SIZE, 0, do_iobuf_reset, USUAL_ALLOC);
-		threads[thread_id].var_list_cache = slab_create(var_list_cache_name, sizeof(struct PStr *) * get_num_var_cached(), 0, NULL, USUAL_ALLOC);
-		threads[thread_id].server_prepared_statement_cache = slab_create(server_prepared_statement_cache_name, sizeof(PgServerPreparedStatement), 0, NULL, USUAL_ALLOC);
+	char name[MAX_SLAB_NAME];
+	FOR_EACH_WORKER_THREAD(thread_id) {
+		snprintf(name, sizeof(name), "server_cache_thread_%d", thread_id);
+		workers[thread_id].server_cache = slab_create(name, sizeof(PgSocket), 0, construct_server, USUAL_ALLOC);
+		snprintf(name, sizeof(name), "client_cache_thread_%d", thread_id);
+		workers[thread_id].client_cache = slab_create(name, sizeof(PgSocket), 0, construct_client, USUAL_ALLOC);
+		snprintf(name, sizeof(name), "iobuf_cache_thread_%d", thread_id);
+		workers[thread_id].iobuf_cache = slab_create(name, IOBUF_SIZE, 0, do_iobuf_reset, USUAL_ALLOC);
+		snprintf(name, sizeof(name), "var_list_cache_thread_%d", thread_id);
+		workers[thread_id].var_list_cache = slab_create(name, sizeof(struct PStr *) * get_num_var_cached(), 0, NULL, USUAL_ALLOC);
+		snprintf(name, sizeof(name), "server_ps_cache_thread_%d", thread_id);
+		workers[thread_id].server_prepared_statement_cache = slab_create(name, sizeof(PgServerPreparedStatement), 0, NULL, USUAL_ALLOC);
 	}
 }
 
@@ -303,8 +224,8 @@ void init_caches_multithread(void)
 static void client_free(PgSocket *client)
 {
 	int thread_id = client->sbuf.thread_id;
-	struct Slab *var_list_cache_ = GET_MULTITHREAD_VAR(var_list_cache, thread_id);
-	struct Slab *client_cache_ = GET_MULTITHREAD_VAR(client_cache, thread_id);
+	struct Slab *var_list_cache_ = WORKER_THREAD_VAR(var_list_cache, thread_id);
+	struct Slab *client_cache_ = WORKER_THREAD_VAR(client_cache, thread_id);
 
 	free_client_prepared_statements(client);
 	varcache_clean(&client->vars);
@@ -313,8 +234,8 @@ static void client_free(PgSocket *client)
 	/* Decrement count here only for cleanup paths that bypass disconnect_client_sqlstate
 	 * (e.g. shutdown). The flag is cleared by disconnect_client_sqlstate to avoid
 	 * double-decrement on the normal disconnect path. */
-	if (multithread_mode && client->contributes_global_client_count) {
-		MULTITHREAD_VISIT(&client_count_lock, {client_count--;});
+	if (client->contributes_global_client_count) {
+		WITH_LOCK(&client_count_lock, {client_count--;});
 	}
 }
 
@@ -324,9 +245,9 @@ static void server_free(PgSocket *server)
 	int thread_id = server->sbuf.thread_id;
 	struct List *el, *tmp_l;
 	OutstandingRequest *request;
-	struct Slab *outstanding_request_cache_ptr = GET_MULTITHREAD_VAR(outstanding_request_cache, thread_id);
-	struct Slab *var_list_cache_ptr = GET_MULTITHREAD_VAR(var_list_cache, thread_id);
-	struct Slab *server_cache_ptr = GET_MULTITHREAD_VAR(server_cache, thread_id);
+	struct Slab *outstanding_request_cache_ptr = WORKER_THREAD_VAR(outstanding_request_cache, thread_id);
+	struct Slab *var_list_cache_ptr = WORKER_THREAD_VAR(var_list_cache, thread_id);
+	struct Slab *server_cache_ptr = WORKER_THREAD_VAR(server_cache, thread_id);
 
 	statlist_for_each_safe(el, &server->outstanding_requests, tmp_l) {
 		request = container_of(el, OutstandingRequest, node);
@@ -349,8 +270,9 @@ void change_client_state(PgSocket *client, SocketState newstate)
 {
 	PgPool *pool = client->pool;
 	int thread_id = client->sbuf.thread_id;
-	struct StatList *justfree_client_list_ptr = (struct StatList *)GET_MULTITHREAD_PTR(justfree_client_list, thread_id);
-	struct StatList *login_client_list_ptr = (struct StatList *)GET_MULTITHREAD_PTR(login_client_list, thread_id);
+	struct StatList *justfree_client_list_ptr = (struct StatList *)WORKER_THREAD_PTR(justfree_client_list, thread_id);
+	struct StatList *login_client_list_ptr = (struct StatList *)WORKER_THREAD_PTR(login_client_list, thread_id);
+
 	/* remove from old location */
 	switch (client->state) {
 	case CL_FREE:
@@ -399,7 +321,7 @@ void change_client_state(PgSocket *client, SocketState newstate)
 		break;
 	case CL_WAITING:
 	case CL_WAITING_LOGIN:
-		client->wait_start = get_multithread_time_with_id(thread_id);
+		client->wait_start = get_worker_thread_time(thread_id);
 		statlist_append(&pool->waiting_client_list, &client->head);
 		break;
 	case CL_ACTIVE:
@@ -422,7 +344,7 @@ void change_server_state(PgSocket *server, SocketState newstate)
 	PgPool *pool = server->pool;
 	int thread_id = server->sbuf.thread_id;
 
-	struct StatList *justfree_server_list_ptr = (struct StatList *)GET_MULTITHREAD_PTR(justfree_server_list, thread_id);
+	struct StatList *justfree_server_list_ptr = (struct StatList *)WORKER_THREAD_PTR(justfree_server_list, thread_id);
 	/* remove from old location */
 	switch (server->state) {
 	case SV_FREE:
@@ -554,9 +476,8 @@ static int cmp_database(struct List *i1, struct List *i2)
 	return strcmp(db1->name, db2->name);
 }
 
-
-static void thread_safe_put_in_order(struct List *newitem, struct ThreadSafeStatList *list,
-				     int (*cmpfn)(struct List *, struct List *))
+static void put_in_order(struct List *newitem, struct ThreadSafeStatList *list,
+			 int (*cmpfn)(struct List *, struct List *))
 {
 	struct List *item;
 	bool inserted = false;
@@ -566,7 +487,7 @@ static void thread_safe_put_in_order(struct List *newitem, struct ThreadSafeStat
 	THREAD_SAFE_STATLIST_EACH(list, item, {
 		int res = cmpfn(item, newitem);
 		if (res == 0) {
-			fatal("thread_safe_put_in_order: found existing elem");
+			fatal("put_in_order: found existing elem");
 		} else if (res > 0) {
 			statlist_put_before(&(list->list), newitem, item);
 			inserted = true;
@@ -576,25 +497,6 @@ static void thread_safe_put_in_order(struct List *newitem, struct ThreadSafeStat
 	if (!inserted) {
 		thread_safe_statlist_append(list, newitem);
 	}
-}
-
-/* put elem into list in correct pos */
-static void put_in_order(struct List *newitem, struct StatList *list,
-			 int (*cmpfn)(struct List *, struct List *))
-{
-	int res;
-	struct List *item;
-
-	statlist_for_each(item, list) {
-		res = cmpfn(item, newitem);
-		if (res == 0) {
-			fatal("put_in_order: found existing elem");
-		} else if (res > 0) {
-			statlist_put_before(list, newitem, item);
-			return;
-		}
-	}
-	statlist_append(list, newitem);
 }
 
 /* create new object if new, then return it */
@@ -609,8 +511,9 @@ PgDatabase *add_peer(const char *name, int peer_id)
 			return NULL;
 
 		list_init(&peer->head);
+		spin_lock_init(&peer->lock, true);
 		peer->peer_id = peer_id;
-		thread_safe_put_in_order(&peer->head, &peer_list, cmp_peer);
+		put_in_order(&peer->head, &peer_list, cmp_peer);
 	}
 
 	return peer;
@@ -624,7 +527,6 @@ PgDatabase *add_database(const char *name)
 	/* create new object if needed */
 	if (db == NULL) {
 		db = thread_safe_slab_alloc(db_cache);
-
 		if (!db)
 			return NULL;
 
@@ -635,8 +537,10 @@ PgDatabase *add_database(const char *name)
 			return NULL;
 		}
 		aatree_init(&db->user_tree, credentials_node_cmp, credentials_node_release);
-		thread_safe_put_in_order(&db->head, &database_list, cmp_database);
+		spin_lock_init(&db->lock, true);
+		put_in_order(&db->head, &database_list, cmp_database);
 	}
+
 	return db;
 }
 
@@ -650,6 +554,7 @@ PgDatabase *register_auto_database(const char *name)
 
 	if (!parse_database(NULL, name, cf_autodb_connstr))
 		return NULL;
+
 	db = find_database(name);
 	if (db) {
 		db->db_auto = true;
@@ -662,7 +567,7 @@ PgGlobalUser *update_global_user_passwd(PgGlobalUser *user, const char *passwd)
 {
 	Assert(user);
 	passwd = passwd ? passwd : "";
-	MULTITHREAD_VISIT(&user->lock,
+	WITH_LOCK(&user->lock,
 	{
 		safe_strcpy(user->credentials.passwd, passwd, sizeof(user->credentials.passwd));
 		user->credentials.dynamic_passwd = strlen(passwd) == 0;
@@ -672,24 +577,22 @@ PgGlobalUser *update_global_user_passwd(PgGlobalUser *user, const char *passwd)
 
 static PgGlobalUser *add_new_global_user(const char *name, const char *passwd)
 {
-	PgGlobalUser *user = thread_safe_slab_alloc(thread_safe_user_cache);
-	int list_num = multithread_mode ? arg_thread_number : 1;
-
+	PgGlobalUser *user = thread_safe_slab_alloc(user_cache);
 	if (!user)
 		return NULL;
 	spin_lock_init(&user->lock, true);
 	user->credentials.global_user = user;
 
 	list_init(&user->head);
-	user->pool_list = malloc(sizeof(struct List) * list_num);
-	for (int i = 0; i < list_num; i++) {
+	user->pool_list = malloc(sizeof(struct List) * num_threads);
+	FOR_EACH_WORKER_THREAD(i) {
 		list_init(&user->pool_list[i]);
 	}
 	safe_strcpy(user->credentials.name, name, sizeof(user->credentials.name));
-	thread_safe_put_in_order(&user->head, &thread_safe_user_list, cmp_user);
+	put_in_order(&user->head, &user_list, cmp_user);
 
-	MULTITHREAD_VISIT(&user_tree_lock,
-			  { aatree_insert(&user_tree, (uintptr_t)user->credentials.name, &user->credentials.tree_node); });
+	WITH_LOCK(&user_tree_lock,
+		  { aatree_insert(&user_tree, (uintptr_t)user->credentials.name, &user->credentials.tree_node); });
 
 	user->pool_mode = POOL_INHERIT;
 	user->pool_size = -1;
@@ -711,12 +614,12 @@ PgCredentials *add_dynamic_credentials(PgDatabase *db, const char *name, const c
 	 * Dynamic credentials are stored in an aatree that's specific to the
 	 * database. So we cannot use find_global_user() here.
 	 */
-	MULTITHREAD_VISIT(&user_lock, {
+	WITH_LOCK(&user_lock, {
 		node = aatree_search(&db->user_tree, (uintptr_t)name);
 		credentials = node ? container_of(node, PgCredentials, tree_node) : NULL;
 
 		if (credentials == NULL) {
-			credentials = thread_safe_slab_alloc(thread_safe_credentials_cache);
+			credentials = thread_safe_slab_alloc(credentials_cache);
 			if (!credentials)
 				return NULL;
 
@@ -724,7 +627,7 @@ PgCredentials *add_dynamic_credentials(PgDatabase *db, const char *name, const c
 
 			credentials->global_user = find_or_add_new_global_user(name, NULL);
 			if (!credentials->global_user) {
-				thread_safe_slab_free(thread_safe_credentials_cache, credentials);
+				thread_safe_slab_free(credentials_cache, credentials);
 				return NULL;
 			}
 
@@ -742,12 +645,12 @@ PgCredentials *add_pam_credentials(const char *name, const char *passwd)
 {
 	PgCredentials *credentials = NULL;
 	struct AANode *node;
-	MULTITHREAD_VISIT(&user_lock, {
+	WITH_LOCK(&user_lock, {
 		node = aatree_search(&pam_user_tree, (uintptr_t)name);
 		credentials = node ? container_of(node, PgCredentials, tree_node) : NULL;
 
 		if (credentials == NULL) {
-			credentials = thread_safe_slab_alloc(thread_safe_credentials_cache);
+			credentials = thread_safe_slab_alloc(credentials_cache);
 			if (!credentials)
 				return NULL;
 
@@ -755,7 +658,7 @@ PgCredentials *add_pam_credentials(const char *name, const char *passwd)
 
 			credentials->global_user = find_or_add_new_global_user(name, NULL);
 			if (!credentials->global_user) {
-				thread_safe_slab_free(thread_safe_credentials_cache, credentials);
+				thread_safe_slab_free(credentials_cache, credentials);
 				return NULL;
 			}
 
@@ -772,13 +675,13 @@ PgCredentials *force_user_credentials(PgDatabase *db, const char *name, const ch
 {
 	PgCredentials *credentials = db->forced_user_credentials;
 	if (!credentials) {
-		credentials = thread_safe_slab_alloc(thread_safe_credentials_cache);
+		credentials = thread_safe_slab_alloc(credentials_cache);
 		if (!credentials)
 			return NULL;
 
 		credentials->global_user = find_or_add_new_global_user(name, NULL);
 		if (!credentials->global_user) {
-			thread_safe_slab_free(thread_safe_credentials_cache, credentials);
+			thread_safe_slab_free(credentials_cache, credentials);
 			return NULL;
 		}
 	}
@@ -801,13 +704,11 @@ PgDatabase *find_peer(int peer_id)
 	return NULL;
 }
 
-
 /* find an existing database */
 PgDatabase *find_database(const char *name)
 {
 	PgDatabase *db = NULL;
 	struct List *item;
-
 
 	bool found = false;
 	THREAD_SAFE_STATLIST_EACH(&database_list, item, {
@@ -827,7 +728,7 @@ PgDatabase *find_database(const char *name)
 			found = true;
 			db->inactive_time = 0;
 			thread_safe_statlist_remove(&autodatabase_idle_list, &db->head);
-			thread_safe_put_in_order(&db->head, &database_list, cmp_database);
+			put_in_order(&db->head, &database_list, cmp_database);
 			break;
 		}
 	});
@@ -860,7 +761,7 @@ PgGlobalUser *find_global_user(const char *name)
 {
 	PgGlobalUser *user = NULL;
 	struct AANode *node;
-	MULTITHREAD_VISIT(&user_tree_lock, { node = aatree_search(&user_tree, (uintptr_t)name); });
+	WITH_LOCK(&user_tree_lock, { node = aatree_search(&user_tree, (uintptr_t)name); });
 	/* we use the tree_node in the embedded PgCredentials struct */
 	user = node ? (PgGlobalUser *) container_of(node, PgCredentials, tree_node) : NULL;
 	return user;
@@ -878,18 +779,16 @@ PgCredentials *find_global_credentials(const char *name)
 /* create new pool object */
 static PgPool *new_pool(PgDatabase *db, PgCredentials *user_credentials, int thread_id)
 {
-	struct Slab *pool_cache_ptr = GET_MULTITHREAD_VAR(pool_cache, thread_id);
-	struct Slab *var_list_cache_ptr = GET_MULTITHREAD_VAR(var_list_cache, thread_id);
-	void *pool_list_ptr = GET_MULTITHREAD_PTR(pool_list, thread_id);
+	struct Slab *pool_cache_ptr = WORKER_THREAD_VAR(pool_cache, thread_id);
+	struct Slab *var_list_cache_ptr = WORKER_THREAD_VAR(var_list_cache, thread_id);
+	void *pool_list_ptr = WORKER_THREAD_PTR(pool_list, thread_id);
 	PgPool *pool = slab_alloc(pool_cache_ptr);
 	if (!pool)
 		return NULL;
 
 	list_init(&pool->head);
 	list_init(&pool->map_head);
-
 	pool->orig_vars.var_list = slab_alloc(var_list_cache_ptr);
-
 
 	pool->user_credentials = user_credentials;
 	pool->db = db;
@@ -907,23 +806,17 @@ static PgPool *new_pool(PgDatabase *db, PgCredentials *user_credentials, int thr
 	statlist_init(&pool->active_cancel_server_list, "active_cancel_server_list");
 	statlist_init(&pool->being_canceled_server_list, "being_canceled_server_list");
 
-	MULTITHREAD_VISIT(&user_credentials->global_user->lock, {
-		list_append(&user_credentials->global_user->pool_list[thread_id == -1 ? 0 : thread_id], &pool->map_head);
+	WITH_LOCK(&user_credentials->global_user->lock, {
+		list_append(&user_credentials->global_user->pool_list[thread_id], &pool->map_head);
 	});
 
 	/* keep pools in db/user order to make stats faster */
-
-	if (multithread_mode) {
-		thread_safe_put_in_order(&pool->head, (struct ThreadSafeStatList *)pool_list_ptr, cmp_pool);
-	} else {
-		put_in_order(&pool->head, (struct StatList *)pool_list_ptr, cmp_pool);
-	}
+	put_in_order(&pool->head, (struct ThreadSafeStatList *)pool_list_ptr, cmp_pool);
 
 	pool->thread_id = thread_id;
 
 	return pool;
 }
-
 
 /*
  * create new peer pool object
@@ -936,9 +829,9 @@ static PgPool *new_peer_pool(PgDatabase *db, int thread_id)
 {
 	PgPool *pool;
 
-	struct Slab *peer_pool_cache_ptr = GET_MULTITHREAD_VAR(peer_pool_cache, thread_id);
-	struct Slab *var_list_cache_ptr = GET_MULTITHREAD_VAR(var_list_cache, thread_id);
-	struct ThreadSafeStatList *peer_pool_list_ptr = GET_MULTITHREAD_PTR(peer_pool_list, thread_id);
+	struct Slab *peer_pool_cache_ptr = WORKER_THREAD_VAR(peer_pool_cache, thread_id);
+	struct Slab *var_list_cache_ptr = WORKER_THREAD_VAR(var_list_cache, thread_id);
+	struct ThreadSafeStatList *peer_pool_list_ptr = WORKER_THREAD_PTR(peer_pool_list, thread_id);
 
 	pool = slab_alloc(peer_pool_cache_ptr);
 	if (!pool)
@@ -957,7 +850,7 @@ static PgPool *new_peer_pool(PgDatabase *db, int thread_id)
 	statlist_init(&pool->active_cancel_server_list, "active_cancel_server_list");
 
 	/* keep pools in peer_id order to make stats faster */
-	thread_safe_put_in_order(&pool->head, peer_pool_list_ptr, cmp_peer_pool);
+	put_in_order(&pool->head, peer_pool_list_ptr, cmp_peer_pool);
 	pool->thread_id = thread_id;
 
 	return pool;
@@ -971,8 +864,8 @@ PgPool *get_pool(PgDatabase *db, PgCredentials *user_credentials, int thread_id)
 	if (!db || !user_credentials)
 		return NULL;
 
-	MULTITHREAD_VISIT(&user_credentials->global_user->lock, {
-		list_for_each(item, &user_credentials->global_user->pool_list[thread_id == -1 ? 0 : thread_id]) {
+	WITH_LOCK(&user_credentials->global_user->lock, {
+		list_for_each(item, &user_credentials->global_user->pool_list[thread_id]) {
 			pool = container_of(item, PgPool, map_head);
 			if (pool->db->name == db->name) {
 				found = true;
@@ -1000,19 +893,12 @@ PgPool *get_peer_pool(PgDatabase *db, int thread_id)
 /* deactivate socket and put into wait queue */
 static void pause_client(PgSocket *client)
 {
-	int *cf_shutdown_ptr;
 	int thread_id = client->sbuf.thread_id;
 
 	Assert(client->state == CL_ACTIVE || client->state == CL_LOGIN);
 	slog_debug(client, "pause_client");
 
-	if (multithread_mode) {
-		cf_shutdown_ptr = &(threads[thread_id].cf_shutdown);
-	} else {
-		cf_shutdown_ptr = &cf_shutdown;
-	}
-
-	if (*cf_shutdown_ptr == SHUTDOWN_WAIT_FOR_SERVERS) {
+	if (*WORKER_THREAD_PTR(cf_shutdown, thread_id) == SHUTDOWN_WAIT_FOR_SERVERS) {
 		disconnect_client(client, true, "server shutting down");
 		return;
 	}
@@ -1048,7 +934,7 @@ void activate_client(PgSocket *client)
 	Assert(client->wait_start > 0);
 
 	/* account for time client spent waiting for server */
-	client->pool->stats.wait_time += (get_multithread_time_with_id(thread_id) - client->wait_start);
+	client->pool->stats.wait_time += (get_worker_thread_time(thread_id) - client->wait_start);
 
 	slog_debug(client, "activate_client");
 	change_client_state(client, CL_ACTIVE);
@@ -1121,7 +1007,6 @@ bool find_server(PgSocket *client)
 	if (client->link)
 		return true;
 
-	slog_noise(client, "find_server: client had no linked server yet");
 	/* try to get idle server, if allowed */
 	if (cf_pause_mode == P_PAUSE || pool->db->db_paused) {
 		server = NULL;
@@ -1139,15 +1024,14 @@ bool find_server(PgSocket *client)
 	} else {
 		while (1) {
 			server = first_socket(&pool->idle_server_list);
-			if (!server) {
+			if (!server)
 				break;
-			} else if (server->close_needed) {
+			else if (server->close_needed)
 				disconnect_server(server, true, "obsolete connection");
-			} else if (!server->ready) {
+			else if (!server->ready)
 				disconnect_server(server, true, "idle server got dirty");
-			} else {
+			else
 				break;
-			}
 		}
 
 		if (!server && !check_fast_fail(client))
@@ -1175,7 +1059,6 @@ bool find_server(PgSocket *client)
 			server->setting_vars = true;
 			server->ready = false;
 			res = false;	/* don't process client data yet */
-			slog_noise(client, "pausing client while applying vars");
 			if (!sbuf_pause(&client->sbuf))
 				disconnect_client(client, true, "pause failed");
 		} else {
@@ -1198,11 +1081,11 @@ static bool other_threads_have_waiters(PgDatabase *db, PgGlobalUser *global_user
 {
 	struct List *item;
 	bool found = false;
-	FOR_EACH_THREAD(tid) {
+	FOR_EACH_WORKER_THREAD(tid) {
 		struct ThreadSafeStatList *pl;
 		if (tid == my_thread)
 			continue;
-		pl = &threads[tid].pool_list;
+		pl = &workers[tid].pool_list;
 		THREAD_SAFE_STATLIST_EACH(pl, item, {
 			PgPool *p = container_of(item, PgPool, head);
 			if ((p->db == db || p->user_credentials->global_user == global_user)
@@ -1254,9 +1137,8 @@ static bool reuse_on_release(PgSocket *server)
 		bool at_limit = false;
 		int db_max = database_max_connections(pool->db);
 		if (db_max > 0) {
-			int current = multithread_get_limit_count(pool->db->name,
-								  &db_connection_limits,
-								  &db_connection_limits_lock);
+			int current;
+			WITH_LOCK(&pool->db->lock, { current = pool->db->connection_count; });
 			if (current >= db_max)
 				at_limit = true;
 		}
@@ -1264,7 +1146,7 @@ static bool reuse_on_release(PgSocket *server)
 			int user_max = user_max_connections(pool->user_credentials->global_user);
 			if (user_max > 0) {
 				int user_current;
-				MULTITHREAD_VISIT(&pool->user_credentials->global_user->lock, {
+				WITH_LOCK(&pool->user_credentials->global_user->lock, {
 					user_current = pool->user_credentials->global_user->connection_count;
 				});
 				if (user_current >= user_max)
@@ -1277,9 +1159,9 @@ static bool reuse_on_release(PgSocket *server)
 					       pool->thread_id)) {
 			disconnect_server(server, true, "freeing slot for other threads");
 			res = false;
-			FOR_EACH_THREAD(tid) {
+			FOR_EACH_WORKER_THREAD(tid) {
 				if (tid != pool->thread_id)
-					wakeup_thread(tid);
+					wakeup_worker_thread(tid);
 			}
 		}
 	}
@@ -1308,7 +1190,7 @@ bool queue_fake_response(PgSocket *client, char request_type)
 PgGlobalUser *find_or_add_new_global_user(const char *name, const char *passwd)
 {
 	PgGlobalUser *user = NULL;
-	MULTITHREAD_VISIT(&user_lock, {
+	WITH_LOCK(&user_lock, {
 		user = find_global_user(name);
 
 		if (!user)
@@ -1337,7 +1219,7 @@ PgCredentials *find_or_add_new_global_credentials(const char *name, const char *
  */
 bool add_outstanding_request(PgSocket *client, char type, ResponseAction action)
 {
-	struct Slab *outstanding_request_cache_ptr;
+	struct Slab *outstanding_request_cache_ptr = WORKER_THREAD_VAR(outstanding_request_cache, get_current_worker_thread_id());
 	OutstandingRequest *request = NULL;
 
 	PgSocket *server = client->link;
@@ -1357,11 +1239,7 @@ bool add_outstanding_request(PgSocket *client, char type, ResponseAction action)
 		return queue_fake_response(client, type);
 	}
 
-	outstanding_request_cache_ptr = outstanding_request_cache;
-	if (multithread_mode) {
-		int thread_id = get_current_thread_id();
-		outstanding_request_cache_ptr = threads[thread_id].outstanding_request_cache;
-	}
+	outstanding_request_cache_ptr = WORKER_THREAD_VAR(outstanding_request_cache, get_current_worker_thread_id());
 
 	request = slab_alloc(outstanding_request_cache_ptr);
 	if (request == NULL)
@@ -1384,11 +1262,7 @@ bool pop_outstanding_request(PgSocket *server, const char types[], bool *skip)
 {
 	OutstandingRequest *request;
 	struct List *item;
-	struct Slab *outstanding_request_cache_ptr = outstanding_request_cache;
-	if (multithread_mode) {
-		int thread_id = get_current_thread_id();
-		outstanding_request_cache_ptr = threads[thread_id].outstanding_request_cache;
-	}
+	struct Slab *outstanding_request_cache_ptr = WORKER_THREAD_VAR(outstanding_request_cache, get_current_worker_thread_id());
 	item = statlist_first(&server->outstanding_requests);
 	if (!item)
 		return false;
@@ -1427,7 +1301,7 @@ bool clear_outstanding_requests_until(PgSocket *server, const char types[])
 {
 	struct List *item, *tmp;
 	int thread_id = server->sbuf.thread_id;
-	struct Slab *outstanding_request_cache_ptr = GET_MULTITHREAD_VAR(outstanding_request_cache, thread_id);
+	struct Slab *outstanding_request_cache_ptr = WORKER_THREAD_VAR(outstanding_request_cache, thread_id);
 
 	statlist_for_each_safe(item, &server->outstanding_requests, tmp) {
 		OutstandingRequest *request = container_of(item, OutstandingRequest, node);
@@ -1478,7 +1352,7 @@ bool life_over(PgSocket *server)
 {
 	PgPool *pool = server->pool;
 	usec_t lifetime_kill_gap = 0;
-	usec_t now = get_multithread_time_with_id(server->sbuf.thread_id);
+	usec_t now = get_worker_thread_time(server->sbuf.thread_id);
 	usec_t age = now - server->connect_time;
 	usec_t last_kill = now - pool->last_lifetime_disconnect;
 	usec_t server_lifetime = pool_server_lifetime(pool);
@@ -1558,7 +1432,7 @@ bool release_server(PgSocket *server)
 	/* enforce lifetime immediately on release */
 	if (server->state != SV_LOGIN && life_over(server)) {
 		disconnect_server(server, true, "server lifetime over");
-		pool->last_lifetime_disconnect = get_multithread_time_with_id(server->sbuf.thread_id);
+		pool->last_lifetime_disconnect = get_worker_thread_time(server->sbuf.thread_id);
 		return false;
 	}
 
@@ -1633,18 +1507,6 @@ static void unlink_server(PgSocket *server, const char *reason)
 		disconnect_client(client, true, "bouncer config error");
 }
 
-static void increase_db_connection_count(PgDatabase *db)
-{
-	multithread_increase_limit_count(db->name, &db_connection_limits, &db_connection_limits_lock);
-	db->connection_count++;
-}
-
-static void decrease_db_connection_count(PgDatabase *db)
-{
-	multithread_decrease_limit_count(db->name, &db_connection_limits, &db_connection_limits_lock);
-	db->connection_count--;
-}
-
 /*
  * close server connection
  *
@@ -1656,7 +1518,7 @@ static void decrease_db_connection_count(PgDatabase *db)
 void disconnect_server(PgSocket *server, bool send_term, const char *reason, ...)
 {
 	int thread_id = server->sbuf.thread_id;
-	usec_t now = get_multithread_time_with_id(thread_id);
+	usec_t now = get_worker_thread_time(thread_id);
 	char buf[128];
 	va_list ap;
 	struct List *cancel_item, *tmp;
@@ -1727,15 +1589,15 @@ void disconnect_server(PgSocket *server, bool send_term, const char *reason, ...
 	}
 
 	if (server->dns_token) {
-		MULTITHREAD_VISIT(&adns_lock, adns_cancel(adns, server->dns_token));
+		WITH_LOCK(&adns_lock, adns_cancel(adns, server->dns_token));
 		server->dns_token = NULL;
 	}
 
 	free_scram_state(&server->scram_state);
 
-	decrease_db_connection_count(server->pool->db);
+	WITH_LOCK(&server->pool->db->lock, { server->pool->db->connection_count--; });
 	if (server->pool->user_credentials) {
-		MULTITHREAD_VISIT(&server->pool->user_credentials->global_user->lock, {
+		WITH_LOCK(&server->pool->user_credentials->global_user->lock, {
 			server->pool->user_credentials->global_user->connection_count--;
 		});
 	}
@@ -1781,24 +1643,23 @@ void disconnect_client(PgSocket *client, bool notify, const char *reason, ...)
 void disconnect_client_sqlstate(PgSocket *client, bool notify, const char *sqlstate, const char *reason)
 {
 	int thread_id = client->sbuf.thread_id;
-	usec_t now = get_multithread_time_with_id(thread_id);
+	usec_t now = get_worker_thread_time(thread_id);
 
 	if (client->db && client->contributes_db_client_count) {
-		multithread_decrease_limit_count(client->db->name, &db_client_connection_limits, &db_client_connection_limits_lock);
-		client->db->client_connection_count--;
+		WITH_LOCK(&client->db->lock, { client->db->client_connection_count--; });
 	}
 
 	/* Decrement global client count early (at disconnect time rather than free time)
 	 * to minimize the race window in multithread mode where a closing connection's
 	 * slot should be available to new connections as soon as possible. */
 	if (client->contributes_global_client_count) {
-		MULTITHREAD_VISIT(&client_count_lock, {client_count--;});
+		WITH_LOCK(&client_count_lock, {client_count--;});
 		client->contributes_global_client_count = false;
 	}
 
 	if (client->login_user_credentials) {
 		if (client->login_user_credentials->global_user && client->user_connection_counted) {
-			MULTITHREAD_VISIT(&client->login_user_credentials->global_user->lock, {
+			WITH_LOCK(&client->login_user_credentials->global_user->lock, {
 				client->login_user_credentials->global_user->client_connection_count--;
 			});
 		}
@@ -1931,6 +1792,7 @@ void disconnect_client_sqlstate(PgSocket *client, bool notify, const char *sqlst
 
 	free(client->startup_options);
 	client->startup_options = NULL;
+
 	change_client_state(client, CL_JUSTFREE);
 	if (!sbuf_close(&client->sbuf))
 		log_noise("sbuf_close failed, retry later");
@@ -1993,6 +1855,7 @@ static void dns_callback(void *arg, const struct sockaddr *sa, int salen)
 		disconnect_server(server, true, "unknown address family: %d", sa->sa_family);
 		return;
 	}
+
 	connect_server(server, sa, salen);
 }
 
@@ -2007,7 +1870,6 @@ static void dns_connect(struct PgSocket *server)
 	int sa_len;
 	int res;
 	char *host_copy = NULL;
-
 
 	/* host list? */
 	if (db->host && strchr(db->host, ',')) {
@@ -2087,12 +1949,13 @@ static void dns_connect(struct PgSocket *server)
 		struct DNSToken *tk;
 		slog_noise(server, "dns socket: %s", host);
 		/* launch dns lookup */
-		MULTITHREAD_VISIT(&adns_lock, {tk = adns_resolve(adns, host, dns_callback, server);});
+		WITH_LOCK(&adns_lock, {tk = adns_resolve(adns, host, dns_callback, server);});
 		if (tk) {
 			server->dns_token = tk;
 		}
 		goto cleanup;
 	}
+
 	connect_server(server, sa, sa_len);
 cleanup:
 	free(host_copy);
@@ -2117,14 +1980,14 @@ static void evict_pool_connection_with_old_connection(PgPool *pool, PgSocket **o
 	}
 }
 
-
 /* evict the single most idle connection from among all pools to make room in the db */
 bool evict_connection(PgDatabase *db, int thread_id)
 {
 	struct List *item;
 	PgPool *pool;
 	PgSocket *oldest_connection = NULL;
-	struct ThreadSafeStatList *pool_list_ptr = GET_MULTITHREAD_PTR(pool_list, thread_id);
+	struct ThreadSafeStatList *pool_list_ptr = WORKER_THREAD_PTR(pool_list, thread_id);
+
 	THREAD_SAFE_STATLIST_EACH(pool_list_ptr, item, {
 		pool = container_of(item, PgPool, head);
 		if (pool->db->name != db->name)
@@ -2138,14 +2001,16 @@ bool evict_connection(PgDatabase *db, int thread_id)
 	}
 
 	/*
-	 * In multithread mode, the global db connection count may be exhausted
-	 * by connections on other threads that we cannot safely evict directly.
+	 * In multithread mode, the db connection count may be exhausted by
+	 * connections on other threads that we cannot safely evict directly.
 	 * Signal those threads to evict an idle connection on our behalf by
 	 * setting the flag; the owning thread's janitor will handle it.
+	 * Not needed in single-thread mode: if eviction failed above, there
+	 * are genuinely no idle connections to free.
 	 */
 	if (multithread_mode) {
-		MULTITHREAD_VISIT(&db_connection_limits_lock, {
-			db->evict_idle_for_auth_query = true;
+		WITH_LOCK(&db->lock, {
+			db->cross_thread_evict_needed = true;
 		});
 	}
 
@@ -2154,11 +2019,9 @@ bool evict_connection(PgDatabase *db, int thread_id)
 
 static int get_current_db_connection_count(PgDatabase *db)
 {
-	if (multithread_mode) {
-		return multithread_get_limit_count(db->name, &db_connection_limits, &db_connection_limits_lock);
-	} else {
-		return db->connection_count;
-	}
+	int count;
+	WITH_LOCK(&db->lock, { count = db->connection_count; });
+	return count;
 }
 
 /* evict the oldest idle connection from the pool */
@@ -2182,7 +2045,7 @@ bool evict_user_connection(PgCredentials *user_credentials, int thread_id)
 	struct List *item;
 	PgPool *pool;
 	PgSocket *oldest_connection = NULL;
-	struct ThreadSafeStatList *pool_list_ptr = GET_MULTITHREAD_PTR(pool_list, thread_id);
+	struct ThreadSafeStatList *pool_list_ptr = WORKER_THREAD_PTR(pool_list, thread_id);
 
 	THREAD_SAFE_STATLIST_EACH(pool_list_ptr, item, {
 		pool = container_of(item, PgPool, head);
@@ -2191,15 +2054,14 @@ bool evict_user_connection(PgCredentials *user_credentials, int thread_id)
 		evict_pool_connection_with_old_connection(pool, &oldest_connection);
 	});
 
-
 	if (oldest_connection) {
 		disconnect_server(oldest_connection, true, "evicted");
 		return true;
 	}
 
 	if (multithread_mode) {
-		MULTITHREAD_VISIT(&user_credentials->global_user->lock, {
-			user_credentials->global_user->evict_idle_for_user = true;
+		WITH_LOCK(&user_credentials->global_user->lock, {
+			user_credentials->global_user->needs_idle_eviction = true;
 		});
 	}
 
@@ -2222,7 +2084,7 @@ void launch_new_connection(PgPool *pool, bool evict_if_needed)
 	struct Slab *server_cache_ptr = NULL;
 	int thread_id = pool->thread_id;
 	int user_conn_count;
-	server_cache_ptr = GET_MULTITHREAD_VAR(server_cache, thread_id);
+	server_cache_ptr = WORKER_THREAD_VAR(server_cache, thread_id);
 
 	log_debug("launch_new_connection: start");
 	/*
@@ -2241,7 +2103,7 @@ void launch_new_connection(PgPool *pool, bool evict_if_needed)
 
 	/* if server bounces, don't retry too fast */
 	if (pool->last_connect_failed) {
-		usec_t now = get_multithread_time_with_id(thread_id);
+		usec_t now = get_worker_thread_time(thread_id);
 		if (now - pool->last_connect_time < cf_server_login_retry) {
 			log_debug("launch_new_connection: last failed, not launching new connection yet, still waiting %" PRIu64 " s",
 				  (cf_server_login_retry - (now - pool->last_connect_time)) / USEC);
@@ -2283,7 +2145,7 @@ void launch_new_connection(PgPool *pool, bool evict_if_needed)
 			/* should we use reserve pool? */
 			PgSocket *c = first_socket(&pool->waiting_client_list);
 			if (cf_res_pool_timeout && pool_res_pool_size(pool)) {
-				usec_t now = get_multithread_time_with_id(thread_id);
+				usec_t now = get_worker_thread_time(thread_id);
 				if (c && (now - c->request_time) >= cf_res_pool_timeout) {
 					if (max < pool_pool_size(pool) + pool_res_pool_size(pool)) {
 						slog_warning(c, "taking connection from reserve_pool");
@@ -2327,17 +2189,15 @@ allow_new:
 	max = user_max_connections(pool->user_credentials->global_user);
 	if (max > 0) {
 		/* try to evict unused connection first */
-		MULTITHREAD_VISIT(&pool->user_credentials->global_user->lock, {
+		WITH_LOCK(&pool->user_credentials->global_user->lock, {
 			user_conn_count = pool->user_credentials->global_user->connection_count;
 		});
 		/* possible starvation */
 		while (evict_if_needed && user_conn_count >= max) {
-			log_debug("launch_new_connection: user '%s' full (%d >= %d)",
-				  pool->user_credentials->name, user_conn_count, max);
 			if (!evict_user_connection(pool->user_credentials, thread_id)) {
 				break;
 			}
-			MULTITHREAD_VISIT(&pool->user_credentials->global_user->lock, {
+			WITH_LOCK(&pool->user_credentials->global_user->lock, {
 				user_conn_count = pool->user_credentials->global_user->connection_count;
 			});
 		}
@@ -2359,13 +2219,13 @@ force_new:
 	/* initialize it */
 	server->pool = pool;
 	server->login_user_credentials = server->pool->user_credentials;
-	server->connect_time = get_multithread_time_with_id(thread_id);
+	server->connect_time = get_worker_thread_time(thread_id);
 	statlist_init(&server->canceling_clients, "canceling_clients");
-	pool->last_connect_time = get_multithread_time_with_id(thread_id);
+	pool->last_connect_time = get_worker_thread_time(thread_id);
 	change_server_state(server, SV_LOGIN);
-	increase_db_connection_count(pool->db);
+	WITH_LOCK(&pool->db->lock, { pool->db->connection_count++; });
 	if (pool->user_credentials) {
-		MULTITHREAD_VISIT(&pool->user_credentials->global_user->lock, {
+		WITH_LOCK(&pool->user_credentials->global_user->lock, {
 			pool->user_credentials->global_user->connection_count++;
 		});
 	}
@@ -2378,8 +2238,8 @@ PgSocket *accept_client(int sock, bool is_unix)
 {
 	bool res;
 	PgSocket *client;
-	int thread_id = get_current_thread_id();
-	struct Slab *client_cache_ptr = GET_MULTITHREAD_VAR(client_cache, thread_id);
+	int thread_id = get_current_worker_thread_id();
+	struct Slab *client_cache_ptr = WORKER_THREAD_VAR(client_cache, thread_id);
 
 	/* get free PgSocket */
 	client = slab_alloc(client_cache_ptr);
@@ -2388,16 +2248,15 @@ PgSocket *accept_client(int sock, bool is_unix)
 		safe_close(sock);
 		return NULL;
 	}
-	if (multithread_mode) {
-		MULTITHREAD_VISIT(&client_count_lock, {client_count++;});
-		client->contributes_global_client_count = true;
-	}
-	client->connect_time = client->request_time = get_multithread_time_with_id(thread_id);
+	WITH_LOCK(&client_count_lock, {client_count++;});
+	client->contributes_global_client_count = true;
+	client->connect_time = client->request_time = get_worker_thread_time(thread_id);
 	client->query_start = 0;
 
 	/* FIXME: take local and remote address from pool_accept() */
 	fill_remote_addr(client, sock, is_unix);
 	fill_local_addr(client, sock, is_unix);
+
 	change_client_state(client, CL_LOGIN);
 
 	client->sbuf.thread_id = thread_id;
@@ -2407,6 +2266,7 @@ PgSocket *accept_client(int sock, bool is_unix)
 			slog_debug(client, "failed connection attempt");
 		return NULL;
 	}
+
 	return client;
 }
 
@@ -2523,7 +2383,6 @@ static void accept_cancel_request_for_peer(int peer_id, PgSocket *req)
 	launch_new_connection(pool, /* evict_if_needed= */ true);
 }
 
-
 /*
  * Accepts a cancellation request, which will eventual cancel the query running
  * on the client that matches req->client_key
@@ -2563,9 +2422,9 @@ void accept_cancel_request(PgSocket *req)
 
 
 	/* find the client that has the same cancel_key as this request */
-	THREAD_ITERATE(thread_id, {
+	FOR_EACH_WORKER_THREAD(thread_id) {
 		bool found = false;
-		struct ThreadSafeStatList *pool_list_ptr = GET_MULTITHREAD_PTR(pool_list, thread_id);
+		struct ThreadSafeStatList *pool_list_ptr = WORKER_THREAD_PTR(pool_list, thread_id);
 		THREAD_SAFE_STATLIST_EACH(pool_list_ptr, pitem, {
 			pool = container_of(pitem, PgPool, head);
 			statlist_for_each(citem, &pool->active_client_list) {
@@ -2591,7 +2450,7 @@ void accept_cancel_request(PgSocket *req)
 		});
 		if (found)
 			break;
-	});
+	}
 
 	/* wrong key */
 	if (!main_client) {
@@ -2641,7 +2500,7 @@ void accept_cancel_request(PgSocket *req)
 	 * request.
 	 */
 	req->pool = pool;
-	MULTITHREAD_VISIT(&pool->cancel_req_lock, {
+	WITH_LOCK(&pool->cancel_req_lock, {
 		pause_cancel_request(req);
 		launch_new_connection(pool, /* evict_if_needed= */ true);
 	});
@@ -2656,7 +2515,7 @@ void forward_cancel_request(PgSocket *server)
 
 	Assert(server->state == SV_LOGIN);
 
-	MULTITHREAD_VISIT(&pool->cancel_req_lock, {
+	WITH_LOCK(&pool->cancel_req_lock, {
 		req = first_socket(&pool->waiting_cancel_req_list);
 		Assert(req != NULL && req->state == CL_WAITING_CANCEL);
 		server->link = req;
@@ -2793,7 +2652,6 @@ bool use_server_socket(int fd, PgAddr *addr,
 	PktBuf tmp;
 	bool res;
 
-
 	/* if the database not found, it's an auto database -> registering... */
 	if (!db) {
 		db = register_auto_database(dbname);
@@ -2815,7 +2673,7 @@ bool use_server_socket(int fd, PgAddr *addr,
 	if (!pool)
 		return false;
 
-	server_cache_ptr = GET_MULTITHREAD_VAR(server_cache, thread_id);
+	server_cache_ptr = WORKER_THREAD_VAR(server_cache, thread_id);
 	server = slab_alloc(server_cache_ptr);
 	if (!server)
 		return false;
@@ -2825,12 +2683,12 @@ bool use_server_socket(int fd, PgAddr *addr,
 	if (!res)
 		return false;
 
-	increase_db_connection_count(db);
+	WITH_LOCK(&db->lock, { db->connection_count++; });
 
 	server->suspended = true;
 	server->pool = pool;
 	server->login_user_credentials = credentials;
-	server->connect_time = server->request_time = get_multithread_time_with_id(thread_id);
+	server->connect_time = server->request_time = get_worker_thread_time(thread_id);
 	server->query_start = 0;
 	statlist_init(&server->canceling_clients, "canceling_clients");
 
@@ -2959,21 +2817,19 @@ void tag_pool_dirty(PgPool *pool)
 }
 
 
-// Not thread safe. Must pause the thread before calling this function.
 void tag_database_dirty(PgDatabase *db)
 {
 	struct List *item;
-	THREAD_ITERATE(thread_id, {
-		struct ThreadSafeStatList *pool_list_ptr = GET_MULTITHREAD_PTR(pool_list, thread_id);
+	FOR_EACH_WORKER_THREAD(thread_id) {
+		struct ThreadSafeStatList *pool_list_ptr = WORKER_THREAD_PTR(pool_list, thread_id);
 
 		THREAD_SAFE_STATLIST_EACH( pool_list_ptr, item, {
 			PgPool *pool = container_of(item, PgPool, head);
 			if (pool->db == db)
 				tag_pool_dirty(pool);
 		});
-	});
+	}
 }
-
 
 void tag_autodb_dirty(void)
 {
@@ -2994,17 +2850,16 @@ void tag_autodb_dirty(void)
 		if (db->db_auto)
 			register_auto_database(db->name);
 	});
-
 	/*
 	 * reload pools
 	 */
-	THREAD_ITERATE(thread_id, {
-		THREAD_SAFE_STATLIST_EACH((struct ThreadSafeStatList *) GET_MULTITHREAD_PTR(pool_list, thread_id), item, {
+	FOR_EACH_WORKER_THREAD(thread_id) {
+		THREAD_SAFE_STATLIST_EACH((struct ThreadSafeStatList *) WORKER_THREAD_PTR(pool_list, thread_id), item, {
 			pool = container_of(item, PgPool, head);
 			if (pool->db->db_auto)
 				tag_pool_dirty(pool);
 		});
-	});
+	}
 }
 
 static bool server_remote_addr_filter(PgSocket *sk, void *arg)
@@ -3022,15 +2877,16 @@ void tag_host_addr_dirty(const char *host, const struct sockaddr *sa)
 
 	memset(&addr, 0, sizeof(addr));
 	pga_copy(&addr, sa);
-	THREAD_ITERATE(thread_id, {
-		struct ThreadSafeStatList *pool_list_ptr = GET_MULTITHREAD_PTR(pool_list, thread_id);
+
+	FOR_EACH_WORKER_THREAD(thread_id) {
+		struct ThreadSafeStatList *pool_list_ptr = WORKER_THREAD_PTR(pool_list, thread_id);
 		THREAD_SAFE_STATLIST_EACH(pool_list_ptr, item, {
 			pool = container_of(item, PgPool, head);
 			if (pool->db->host && strcmp(host, pool->db->host) == 0) {
 				for_each_server_filtered(pool, tag_dirty, server_remote_addr_filter, &addr);
 			}
 		});
-	});
+	}
 }
 
 /* move objects from justfree_* to free_* lists */
@@ -3039,15 +2895,17 @@ void reuse_just_freed_objects(void)
 	struct List *tmp, *item;
 	PgSocket *sk;
 	bool close_works = true;
-	int thread_id = get_current_thread_id();
+	int thread_id = get_current_worker_thread_id();
+
 	/*
 	 * event_del() may fail because of ENOMEM for event handlers
 	 * that need only changes sent to kernel on each loop.
 	 *
 	 * Keep open sbufs in justfree lists until successful.
 	 */
-	struct StatList *justfree_client_list_ptr = GET_MULTITHREAD_PTR(justfree_client_list, thread_id);
-	struct StatList *justfree_server_list_ptr = GET_MULTITHREAD_PTR(justfree_server_list, thread_id);
+
+	struct StatList *justfree_client_list_ptr = WORKER_THREAD_PTR(justfree_client_list, thread_id);
+	struct StatList *justfree_server_list_ptr = WORKER_THREAD_PTR(justfree_server_list, thread_id);
 	statlist_for_each_safe(item, justfree_client_list_ptr, tmp) {
 		sk = container_of(item, PgSocket, head);
 		if (sbuf_is_closed(&sk->sbuf)) {
@@ -3066,7 +2924,6 @@ void reuse_just_freed_objects(void)
 	}
 }
 
-
 static void objects_cleanup_multithread(void)
 {
 	struct List *item, *tmp;
@@ -3083,17 +2940,17 @@ static void objects_cleanup_multithread(void)
 
 	THREAD_SAFE_STATLIST_EACH(&peer_list, item, {
 		PgDatabase *peer = container_of(item, PgDatabase, head);
-		FOR_EACH_THREAD(thread_id) {
+		FOR_EACH_WORKER_THREAD(thread_id) {
 			kill_peer(peer, thread_id);
 		}
 	});
 
-	FOR_EACH_THREAD(thread_id) {
-		statlist_for_each_safe(item, &threads[thread_id].justfree_server_list, tmp) {
+	FOR_EACH_WORKER_THREAD(thread_id) {
+		statlist_for_each_safe(item, &workers[thread_id].justfree_server_list, tmp) {
 			PgSocket *server = container_of(item, PgSocket, head);
 			server_free(server);
 		}
-		statlist_for_each_safe(item, &threads[thread_id].justfree_client_list, tmp) {
+		statlist_for_each_safe(item, &workers[thread_id].justfree_client_list, tmp) {
 			PgSocket *client = container_of(item, PgSocket, head);
 			client_free(client);
 		}
@@ -3101,135 +2958,58 @@ static void objects_cleanup_multithread(void)
 
 	clear_user_tree_cached_scram_keys(&user_tree);
 
-	THREAD_SAFE_STATLIST_EACH(&thread_safe_user_list, item, {
+	THREAD_SAFE_STATLIST_EACH(&user_list, item, {
 		PgGlobalUser *user = container_of(item, PgGlobalUser, head);
 		free(user->pool_list);
 	});
-
-	memset(&login_client_list, 0, sizeof login_client_list);
-	memset(&thread_safe_user_list, 0, sizeof thread_safe_user_list);
+	memset(&user_list, 0, sizeof user_list);
 	memset(&database_list, 0, sizeof database_list);
-	memset(&pool_list, 0, sizeof pool_list);
 	memset(&pam_user_tree, 0, sizeof pam_user_tree);
 	memset(&user_tree, 0, sizeof user_tree);
 	memset(&autodatabase_idle_list, 0, sizeof autodatabase_idle_list);
 
-	FOR_EACH_THREAD(thread_id) {
-		memset(&threads[thread_id].login_client_list, 0, sizeof threads[thread_id].login_client_list);
-		memset(&threads[thread_id].pool_list, 0, sizeof threads[thread_id].pool_list);
+	FOR_EACH_WORKER_THREAD(thread_id) {
+		memset(&workers[thread_id].login_client_list, 0, sizeof workers[thread_id].login_client_list);
+		memset(&workers[thread_id].pool_list, 0, sizeof workers[thread_id].pool_list);
 
-		slab_destroy(threads[thread_id].server_cache);
-		threads[thread_id].server_cache = NULL;
-		slab_destroy(threads[thread_id].client_cache);
-		threads[thread_id].client_cache = NULL;
-		slab_destroy(threads[thread_id].pool_cache);
-		threads[thread_id].pool_cache = NULL;
-		slab_destroy(threads[thread_id].peer_cache);
-		threads[thread_id].peer_cache = NULL;
-		slab_destroy(threads[thread_id].peer_pool_cache);
-		threads[thread_id].peer_pool_cache = NULL;
-		slab_destroy(threads[thread_id].iobuf_cache);
-		threads[thread_id].iobuf_cache = NULL;
-		slab_destroy(threads[thread_id].outstanding_request_cache);
-		threads[thread_id].outstanding_request_cache = NULL;
-		slab_destroy(threads[thread_id].var_list_cache);
-		threads[thread_id].var_list_cache = NULL;
-		slab_destroy(threads[thread_id].server_prepared_statement_cache);
-		threads[thread_id].server_prepared_statement_cache = NULL;
+		slab_destroy(workers[thread_id].server_cache);
+		workers[thread_id].server_cache = NULL;
+		slab_destroy(workers[thread_id].client_cache);
+		workers[thread_id].client_cache = NULL;
+		slab_destroy(workers[thread_id].pool_cache);
+		workers[thread_id].pool_cache = NULL;
+		slab_destroy(workers[thread_id].peer_pool_cache);
+		workers[thread_id].peer_pool_cache = NULL;
+		slab_destroy(workers[thread_id].iobuf_cache);
+		workers[thread_id].iobuf_cache = NULL;
+		slab_destroy(workers[thread_id].outstanding_request_cache);
+		workers[thread_id].outstanding_request_cache = NULL;
+		slab_destroy(workers[thread_id].var_list_cache);
+		workers[thread_id].var_list_cache = NULL;
+		slab_destroy(workers[thread_id].server_prepared_statement_cache);
+		workers[thread_id].server_prepared_statement_cache = NULL;
 	}
-
 	thread_safe_slab_destroy(db_cache);
 	db_cache = NULL;
-	thread_safe_slab_destroy(thread_safe_user_cache);
-	thread_safe_user_cache = NULL;
-	thread_safe_slab_destroy(thread_safe_credentials_cache);
-	thread_safe_credentials_cache = NULL;
-
-	FOR_EACH_THREAD(thread_id) {
-		if (threads[thread_id].base) {
-			event_base_free(threads[thread_id].base);
-			threads[thread_id].base = NULL;
+	slab_destroy(peer_cache);
+	peer_cache = NULL;
+	thread_safe_slab_destroy(user_cache);
+	user_cache = NULL;
+	thread_safe_slab_destroy(credentials_cache);
+	credentials_cache = NULL;
+	FOR_EACH_WORKER_THREAD(thread_id) {
+		if (workers[thread_id].base) {
+			/* In multithread mode each worker owns its base; free it here.
+			 * In single-thread mode workers[0].base == pgb_event_base which
+			 * is freed separately in cleanup(), so only NULL it out here. */
+			if (multithread_mode)
+				event_base_free(workers[thread_id].base);
+			workers[thread_id].base = NULL;
 		}
 	}
 }
 
 void objects_cleanup(void)
 {
-	struct List *item, *tmp;
-	PgDatabase *db;
-
-	if (multithread_mode) {
-		objects_cleanup_multithread();
-		return;
-	}
-
-	/* close can be postpones, just in case call twice */
-	reuse_just_freed_objects();
-	reuse_just_freed_objects();
-
-	THREAD_SAFE_STATLIST_EACH(&autodatabase_idle_list, item, {
-		db = container_of(item, PgDatabase, head);
-		kill_database(db);
-	});
-	THREAD_SAFE_STATLIST_EACH(&database_list, item, {
-		db = container_of(item, PgDatabase, head);
-		kill_database(db);
-	});
-	THREAD_SAFE_STATLIST_EACH(&peer_list, item, {
-		PgDatabase *peer = container_of(item, PgDatabase, head);
-		THREAD_ITERATE(thread_id, {
-			kill_peer(peer, thread_id);
-		});
-	});
-
-	statlist_for_each_safe(item, &justfree_server_list, tmp) {
-		PgSocket *server = container_of(item, PgSocket, head);
-		server_free(server);
-	}
-
-	statlist_for_each_safe(item, &justfree_client_list, tmp) {
-		PgSocket *client = container_of(item, PgSocket, head);
-		client_free(client);
-	}
-
-	/* Cleanup cached scram keys stored with PgCredentials */
-	clear_user_tree_cached_scram_keys(&user_tree);
-
-	THREAD_SAFE_STATLIST_EACH(&thread_safe_user_list, item, {
-		PgGlobalUser *user = container_of(item, PgGlobalUser, head);
-		free(user->pool_list);
-	});
-
-	memset(&login_client_list, 0, sizeof login_client_list);
-	memset(&thread_safe_user_list, 0, sizeof thread_safe_user_list);
-	memset(&database_list, 0, sizeof database_list);
-	memset(&pool_list, 0, sizeof pool_list);
-	memset(&pam_user_tree, 0, sizeof pam_user_tree);
-	memset(&user_tree, 0, sizeof user_tree);
-	memset(&autodatabase_idle_list, 0, sizeof autodatabase_idle_list);
-
-	slab_destroy(server_cache);
-	server_cache = NULL;
-	slab_destroy(client_cache);
-	client_cache = NULL;
-	thread_safe_slab_destroy(db_cache);
-	db_cache = NULL;
-	slab_destroy(peer_cache);
-	peer_cache = NULL;
-	slab_destroy(peer_pool_cache);
-	peer_pool_cache = NULL;
-	slab_destroy(pool_cache);
-	pool_cache = NULL;
-	thread_safe_slab_destroy(thread_safe_user_cache);
-	thread_safe_user_cache = NULL;
-	thread_safe_slab_destroy(thread_safe_credentials_cache);
-	thread_safe_credentials_cache = NULL;
-	slab_destroy(iobuf_cache);
-	iobuf_cache = NULL;
-	slab_destroy(outstanding_request_cache);
-	outstanding_request_cache = NULL;
-	slab_destroy(var_list_cache);
-	var_list_cache = NULL;
-	slab_destroy(server_prepared_statement_cache);
-	server_prepared_statement_cache = NULL;
+	objects_cleanup_multithread();
 }

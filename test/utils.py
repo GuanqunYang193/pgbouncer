@@ -1072,13 +1072,13 @@ class Bouncer(QueryRunner):
         single cell and return this value"""
         return self.admin_runner.sql_value(query, **kwargs)
 
-    def get_thread_number(self):
+    def get_worker_thread_count(self):
         """Get the number of threads PgBouncer is running with"""
         result = self.admin("SHOW CONFIG")
         for row in result:
-            if row[0] == "thread_number":
+            if row[0] == "worker_thread_count":
                 return 1 if int(row[1]) == 0 else int(row[1])
-        raise Exception("thread_number not found in SHOW CONFIG")
+        raise Exception("worker_thread_count not found in SHOW CONFIG")
 
     def aadmin(self, query, **kwargs):
         """Run an SQL query on the PgBouncer admin database in an asynchronous

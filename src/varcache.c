@@ -21,7 +21,6 @@
  */
 
 #include "bouncer.h"
-#include "multithread.h"
 
 #include <usual/pgutil.h>
 #include <usual/string.h>
@@ -37,7 +36,6 @@ struct var_lookup {
 
 static struct var_lookup *lookup_map;
 
-static struct StrPool *vpool;
 
 static inline struct PStr *get_value(VarCache *cache, const struct var_lookup *lk)
 {
@@ -112,16 +110,13 @@ bool varcache_set(VarCache *cache, const char *key, const char *value, int threa
 	const struct var_lookup *lk = NULL;
 	struct PStr *pstr = NULL;
 	struct StrPool *pool;
-	struct StrPool **vpool_ = &vpool;
-	if (multithread_mode) {
-		vpool_ = &(threads[thread_id].vpool);
-	}
-	if (!(*vpool_)) {
-		(*vpool_) = strpool_create(USUAL_ALLOC);
-		if (!(*vpool_))
+
+	if (!workers[thread_id].vpool) {
+		workers[thread_id].vpool = strpool_create(USUAL_ALLOC);
+		if (!workers[thread_id].vpool)
 			return false;
 	}
-	pool = *vpool_;
+	pool = workers[thread_id].vpool;
 
 	HASH_FIND_STR(lookup_map, key, lk);
 
@@ -308,13 +303,8 @@ void varcache_add_params(PktBuf *pkt, VarCache *vars)
 
 void varcache_deinit(void)
 {
-	if (multithread_mode) {
-		FOR_EACH_THREAD(thread_id){
-			strpool_free(threads[thread_id].vpool);
-			threads[thread_id].vpool = NULL;
-		}
-	} else {
-		strpool_free(vpool);
-		vpool = NULL;
+	FOR_EACH_WORKER_THREAD(thread_id){
+		strpool_free(workers[thread_id].vpool);
+		workers[thread_id].vpool = NULL;
 	}
 }

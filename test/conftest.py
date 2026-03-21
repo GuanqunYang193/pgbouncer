@@ -211,11 +211,11 @@ async def bouncer(pg, tmp_path, request):
 
     # Configure thread settings based on the parameter
     if request.param == "single_thread":
-        # For single-threaded mode, no thread_number needed (default behavior)
+        # For single-threaded mode, no worker_thread_count needed (default behavior)
         pass
     elif request.param == "multithread":
-        # For multi-threaded mode, add thread_number = 2 to the config
-        bouncer.write_ini("thread_number = 2")
+        # For multi-threaded mode, add worker_thread_count = 2 to the config
+        bouncer.write_ini("worker_thread_count = 2")
 
     await bouncer.start()
 

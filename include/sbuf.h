@@ -17,7 +17,7 @@
  */
 
 #include <usual/mbuf.h>
-#include "bouncer.h"
+
 /*
  * event types for protocol handler
  */
@@ -94,9 +94,9 @@ struct SBuf {
 
 	int thread_id;	/* thread handling this SBuf */
 
-	MultithreadEventArgs continue_event_args;	/* MultithreadEventArgs for continue */
-	MultithreadEventArgs wait_for_data_event_args;	/* MultithreadEventArgs for wait_for_data */
-	MultithreadEventArgs ev_once_args;		/* MultithreadEventArgs for one-shot events (connect, queue_once, queue_send, recv_forced) */
+	WorkerEventArgs continue_event_args;	/* WorkerEventArgs for continue */
+	WorkerEventArgs wait_for_data_event_args;	/* WorkerEventArgs for wait_for_data */
+	WorkerEventArgs ev_once_args;		/* WorkerEventArgs for one-shot events (connect, queue_once, queue_send, recv_forced) */
 };
 
 #define sbuf_socket(sbuf) ((sbuf)->sock)

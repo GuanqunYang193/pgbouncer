@@ -19,16 +19,14 @@
 /*
  * core structures
  */
-#ifndef BOUNCER_H
-#define BOUNCER_H
 
 #include "system.h"
 
 #include <usual/cfparser.h>
-#include <usual/pthread.h>
 #include <usual/time.h>
 #include <usual/list.h>
 #include <usual/statlist.h>
+#include <usual/statlist_ts.h>
 #include <usual/aatree.h>
 #include <usual/pthread.h>
 #include <usual/socket.h>
@@ -172,17 +170,16 @@ typedef struct ScramState ScramState;
 typedef struct PgPreparedStatement PgPreparedStatement;
 typedef enum ResponseAction ResponseAction;
 typedef enum ReplicationType ReplicationType;
-typedef struct MultithreadEventArgs {
+typedef struct WorkerEventArgs {
 	event_callback_fn func;
 	void *arg;
 	SpinLock *lock;
 	bool persistent;
-} MultithreadEventArgs;
-
-typedef struct ConnectionLimit ConnectionLimit;
+} WorkerEventArgs;
 
 extern int cf_sbuf_len;
 
+#include "sig.h"
 #include "util.h"
 #include "iobuf.h"
 #include "sbuf.h"
@@ -197,6 +194,7 @@ extern int cf_sbuf_len;
 #include "pooler.h"
 #include "proto.h"
 #include "objects.h"
+#include "multithread.h"
 #include "stats.h"
 #include "takeover.h"
 #include "janitor.h"
@@ -221,6 +219,9 @@ extern int cf_sbuf_len;
 
 /* matching NAMEDATALEN */
 #define MAX_DBNAME      64
+
+/* max length for slab cache name strings */
+#define MAX_SLAB_NAME   64
 
 /*
  * Ought to match NAMEDATALEN.  Some cloud services use longer user
@@ -592,7 +593,7 @@ struct PgGlobalUser {
 	 * When set, other threads' janitors will evict one idle server to make
 	 * room. Protected by lock.
 	 */
-	bool evict_idle_for_user;
+	bool needs_idle_eviction;
 };
 
 /*
@@ -641,16 +642,18 @@ struct PgDatabase {
 	bool admin;		/* internal console db */
 	bool fake;		/* not a real database, only for mock auth */
 	/*
-	 * In multithread mode, set when an auth_query needs a server connection
-	 * but max_db_connections is exhausted by other threads. When set, other
-	 * threads' janitors will evict one idle server to make room.
-	 * Protected by db_connection_limits_lock.
+	 * In multithread mode, set when this thread's db connection count has hit
+	 * max_db_connections and there are no idle connections on this thread to
+	 * evict directly. Other threads' janitors will see this flag and evict one
+	 * idle server to free up a slot.
+	 * Protected by db->lock.
 	 */
-	bool evict_idle_for_auth_query;
+	bool cross_thread_evict_needed;
 	usec_t inactive_time;	/* when auto-database became inactive (to kill it after timeout) */
+	int connection_count;	/* total connections for this database in all pools, protected by db->lock */
+	int client_connection_count;	/* total client connections for this database, protected by db->lock */
+	SpinLock lock;		/* protects connection_count, client_connection_count, cross_thread_evict_needed */
 	unsigned active_stamp;	/* set if autodb has connections */
-	int connection_count;	/* total connections for this database in all pools */
-	int client_connection_count;	/* total client connections for this database */
 
 	struct AATree user_tree;	/* users that have been queried on this database */
 };
@@ -821,14 +824,6 @@ struct PgSocket {
 	SBuf sbuf;		/* stream buffer, must be last */
 };
 
-struct ConnectionLimit {
-	char *name;
-	int limit;
-	int current_count;
-	UT_hash_handle hh;
-};
-
-
 #define RAW_IOBUF_SIZE  offsetof(IOBuf, buf)
 #define IOBUF_SIZE      (RAW_IOBUF_SIZE + cf_sbuf_len)
 
@@ -953,7 +948,7 @@ extern char *cf_server_tls13_ciphers;
 
 extern int cf_max_prepared_statements;
 
-extern int arg_thread_number;
+extern int num_threads;
 extern bool multithread_mode;
 
 extern const struct CfLookup pool_mode_map[];
@@ -964,12 +959,6 @@ extern usec_t g_suspend_start;
 extern struct DNSContext *adns;
 extern SpinLock adns_lock;
 extern struct HBA *parsed_hba;
-
-extern ConnectionLimit *db_connection_limits;
-extern SpinLock db_connection_limits_lock;
-
-extern ConnectionLimit *db_client_connection_limits;
-extern SpinLock db_client_connection_limits_lock;
 
 extern SpinLock user_lock;
 
@@ -1015,12 +1004,7 @@ bool set_config_param(const char *key, const char *val);
 void config_for_each(void (*param_cb)(void *arg, const char *name, const char *val, const char *defval, bool reloadable),
 		     void *arg);
 
-extern pthread_key_t thread_pointer;
+extern pthread_key_t worker_key;
 
 extern int client_count;
 extern SpinLock client_count_lock;
-
-extern int total_active_count;
-extern SpinLock total_active_count_lock;
-
-#endif /* BOUNCER_H */

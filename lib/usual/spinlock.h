@@ -31,6 +31,9 @@ typedef struct {
 	bool enable_recursive;
 } SpinLock;
 
+#define SPIN_LOCK_INITIALIZED 1
+#define SPINLOCK_INITIALIZER(recursive) { 0, 0, SPIN_LOCK_INITIALIZED, (recursive) }
+
 bool spin_lock_owns(SpinLock *lock);
 void spin_lock_init(SpinLock *lock, bool recursive);
 void spin_lock_acquire(SpinLock *lock);

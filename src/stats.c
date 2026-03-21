@@ -17,7 +17,6 @@
  */
 
 #include "bouncer.h"
-#include "multithread.h"
 #include <usual/statlist_ts.h>
 
 static struct event ev_stats;
@@ -38,7 +37,6 @@ static void reset_stats(PgStats *stat)
 	stat->ps_server_parse_count = 0;
 	stat->ps_bind_count = 0;
 }
-
 
 static void stat_add(PgStats *total, PgStats *stat)
 {
@@ -105,7 +103,7 @@ static void calc_average(PgStats *avg, PgStats *cur, PgStats *old, usec_t curren
 static void write_stats(PktBuf *buf, PgStats *stat, PgStats *old, char *dbname, int thread_id)
 {
 	PgStats avg;
-	calc_average(&avg, stat, old, get_multithread_time_with_id(thread_id));
+	calc_average(&avg, stat, old, get_worker_thread_time(thread_id));
 	pktbuf_write_DataRow(buf, "sNNNNNNNNNNNNNNNNNNNNNNi", dbname,
 			     stat->server_assignment_count,
 			     stat->xact_count, stat->query_count,
@@ -119,7 +117,7 @@ static void write_stats(PktBuf *buf, PgStats *stat, PgStats *old, char *dbname, 
 			     avg.xact_time, avg.query_time,
 			     avg.wait_time, avg.ps_client_parse_count,
 			     avg.ps_server_parse_count, avg.ps_bind_count,
-			     multithread_mode ? thread_id : 0);
+			     thread_id);
 }
 
 static bool admin_database_stats_internal(PgSocket *client, struct ThreadSafeStatList *pool_list, PktBuf *buf, int thread_id, void (*write_func)(PktBuf *, PgStats *, PgStats *, char *, int))
@@ -181,12 +179,12 @@ bool admin_database_stats(PgSocket *client)
 				    "avg_server_parse_count", "avg_bind_count",
 				    "thread_id");
 
-	THREAD_ITERATE(thread_id, {
-		struct ThreadSafeStatList *pool_list_ptr = GET_MULTITHREAD_PTR(pool_list, thread_id);
-		lock_thread(thread_id);
+	FOR_EACH_WORKER_THREAD(thread_id) {
+		struct ThreadSafeStatList *pool_list_ptr = WORKER_THREAD_PTR(pool_list, thread_id);
+		lock_worker_thread(thread_id);
 		admin_database_stats_internal(client, pool_list_ptr, buf, thread_id, write_stats);
-		unlock_thread(thread_id);
-	});
+		unlock_worker_thread(thread_id);
+	}
 
 	admin_flush(client, buf, "SHOW");
 
@@ -202,7 +200,7 @@ static void write_stats_totals(PktBuf *buf, PgStats *stat, PgStats *old, char *d
 			     stat->xact_time, stat->query_time,
 			     stat->wait_time, stat->ps_client_parse_count,
 			     stat->ps_server_parse_count, stat->ps_bind_count,
-			     multithread_mode ? thread_id : 0);
+			     thread_id);
 }
 
 bool admin_database_stats_totals(PgSocket *client)
@@ -223,12 +221,12 @@ bool admin_database_stats_totals(PgSocket *client)
 				    "server_parse_count", "bind_count",
 				    "thread_id");
 
-	THREAD_ITERATE(thread_id, {
-		struct ThreadSafeStatList *pool_list_ptr = GET_MULTITHREAD_PTR(pool_list, thread_id);
-		lock_thread(thread_id);
+	FOR_EACH_WORKER_THREAD(thread_id) {
+		struct ThreadSafeStatList *pool_list_ptr = WORKER_THREAD_PTR(pool_list, thread_id);
+		lock_worker_thread(thread_id);
 		admin_database_stats_internal(client, pool_list_ptr, buf, thread_id, write_stats_totals);
-		unlock_thread(thread_id);
-	});
+		unlock_worker_thread(thread_id);
+	}
 	admin_flush(client, buf, "SHOW");
 
 	return true;
@@ -237,7 +235,7 @@ bool admin_database_stats_totals(PgSocket *client)
 static void write_stats_averages(PktBuf *buf, PgStats *stat, PgStats *old, char *dbname, int thread_id)
 {
 	PgStats avg;
-	calc_average(&avg, stat, old, get_multithread_time_with_id(thread_id));
+	calc_average(&avg, stat, old, get_worker_thread_time(thread_id));
 	pktbuf_write_DataRow(buf, "sNNNNNNNNNNNi", dbname,
 			     avg.server_assignment_count,
 			     avg.xact_count, avg.query_count,
@@ -245,7 +243,7 @@ static void write_stats_averages(PktBuf *buf, PgStats *stat, PgStats *old, char 
 			     avg.xact_time, avg.query_time,
 			     avg.wait_time, avg.ps_client_parse_count,
 			     avg.ps_server_parse_count, avg.ps_bind_count,
-			     multithread_mode ? thread_id : 0);
+			     thread_id);
 }
 
 bool admin_database_stats_averages(PgSocket *client)
@@ -266,12 +264,12 @@ bool admin_database_stats_averages(PgSocket *client)
 				    "avg_server_parse_count", "avg_bind_count",
 				    "thread_id");
 
-	THREAD_ITERATE(thread_id, {
-		struct ThreadSafeStatList *pool_list_ptr = GET_MULTITHREAD_PTR(pool_list, thread_id);
-		lock_thread(thread_id);
+	FOR_EACH_WORKER_THREAD(thread_id) {
+		struct ThreadSafeStatList *pool_list_ptr = WORKER_THREAD_PTR(pool_list, thread_id);
+		lock_worker_thread(thread_id);
 		admin_database_stats_internal(client, pool_list_ptr, buf, thread_id, write_stats_averages);
-		unlock_thread(thread_id);
-	});
+		unlock_worker_thread(thread_id);
+	}
 	admin_flush(client, buf, "SHOW");
 
 	return true;
@@ -293,14 +291,14 @@ bool show_stat_totals(PgSocket *client)
 		return true;
 	}
 
-	THREAD_ITERATE(thread_id, {
-		struct ThreadSafeStatList *pool_list_ptr = GET_MULTITHREAD_PTR(pool_list, thread_id);
+	FOR_EACH_WORKER_THREAD(thread_id) {
+		struct ThreadSafeStatList *pool_list_ptr = WORKER_THREAD_PTR(pool_list, thread_id);
 		THREAD_SAFE_STATLIST_EACH(pool_list_ptr, item, {
 			pool = container_of(item, PgPool, head);
 			stat_add(&st_total, &pool->stats);
 			stat_add(&old_total, &pool->older_stats);
 		});
-	});
+	}
 
 	calc_average(&avg, &st_total, &old_total, get_cached_time());
 
@@ -336,7 +334,6 @@ bool show_stat_totals(PgSocket *client)
 	return true;
 }
 
-
 static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 {
 	struct List *item;
@@ -350,8 +347,8 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 	old_stamp = new_stamp;
 	new_stamp = get_cached_time();
 
-	THREAD_ITERATE(thread_id, {
-		struct ThreadSafeStatList *pool_list_ptr = GET_MULTITHREAD_PTR(pool_list, thread_id);
+	FOR_EACH_WORKER_THREAD(thread_id) {
+		struct ThreadSafeStatList *pool_list_ptr = WORKER_THREAD_PTR(pool_list, thread_id);
 		THREAD_SAFE_STATLIST_EACH(pool_list_ptr, item, {
 			pool = container_of(item, PgPool, head);
 			pool->older_stats = pool->newer_stats;
@@ -359,8 +356,7 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 			stat_add(&cur_total, &pool->stats);
 			stat_add(&old_total, &pool->older_stats);
 		});
-	});
-
+	}
 
 	calc_average(&avg, &cur_total, &old_total, get_cached_time());
 
@@ -406,7 +402,6 @@ static void refresh_stats(evutil_socket_t s, short flags, void *arg)
 		   avg.xact_time, avg.query_time,
 		   avg.wait_time);
 }
-
 
 void stats_setup(void)
 {

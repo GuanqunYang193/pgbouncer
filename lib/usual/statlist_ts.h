@@ -14,6 +14,21 @@ struct ThreadSafeStatList {
 	SpinLock lock;
 };
 
+/** Define and statically initialize a ThreadSafeStatList head */
+#ifdef LIST_DEBUG
+#define THREAD_SAFE_STATLIST(var, recursive) \
+	struct ThreadSafeStatList var = { \
+		{{&var.list.head, &var.list.head}, 0, #var}, \
+		SPINLOCK_INITIALIZER(recursive) \
+	}
+#else
+#define THREAD_SAFE_STATLIST(var, recursive) \
+	struct ThreadSafeStatList var = { \
+		{{&var.list.head, &var.list.head}, 0}, \
+		SPINLOCK_INITIALIZER(recursive) \
+	}
+#endif
+
 /** Initialize ThreadSafeStatList head */
 static inline void thread_safe_statlist_init(struct ThreadSafeStatList *list, const char *name, bool enable_recursive_lock)
 {
@@ -114,29 +129,11 @@ static inline void thread_safe_statlist_put_after(struct ThreadSafeStatList *lis
 #define THREAD_SAFE_STATLIST_EACH(list_ptr, item, BODY)                 \
 	do {                                                                \
 		struct List *tmp;                                               \
-		if (multithread_mode) {                                           \
-			spin_lock_acquire(&(list_ptr)->lock);                   \
-		}                                                               \
+		spin_lock_acquire(&(list_ptr)->lock);                           \
 		statlist_for_each_safe(item, &(list_ptr)->list, tmp) {          \
 			BODY                                                    \
 		}                                                               \
-		if (multithread_mode) {                                           \
-			spin_lock_release(&(list_ptr)->lock);                   \
-		}                                                               \
-	} while (0)
-
-#define THREAD_SAFE_STATLIST_EACH(list_ptr, item, BODY)                 \
-	do {                                                                \
-		struct List *tmp;                                               \
-		if (multithread_mode) {                                           \
-			spin_lock_acquire(&(list_ptr)->lock);                   \
-		}                                                               \
-		statlist_for_each_safe(item, &(list_ptr)->list, tmp) {          \
-			BODY                                                    \
-		}                                                               \
-		if (multithread_mode) {                                           \
-			spin_lock_release(&(list_ptr)->lock);                   \
-		}                                                               \
+		spin_lock_release(&(list_ptr)->lock);                           \
 	} while (0)
 
 

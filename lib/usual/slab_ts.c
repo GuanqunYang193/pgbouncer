@@ -5,13 +5,7 @@
 
 
 /* keep track of all active thread-safe slabs */
-static struct ThreadSafeStatList thread_safe_slab_list;
-
-__attribute__((constructor))
-static void init_thread_safe_slab_list_global(void)
-{
-	thread_safe_statlist_init(&thread_safe_slab_list, "thread_safe_slab_list", true);
-}
+static THREAD_SAFE_STATLIST(thread_safe_slab_list, true);
 
 /*
  * Thread-safe wrapper for the primitive slab allocator.

@@ -21,7 +21,6 @@
  */
 
 #include "bouncer.h"
-#include "multithread.h"
 
 #include <usual/netdb.h>
 #include <usual/safeio.h>
@@ -36,7 +35,6 @@ struct ListenSocket {
 };
 
 struct ThreadSafeStatList sock_list;
-
 
 /* hints for getaddrinfo(listen_addr) */
 static const struct addrinfo hints = {
@@ -242,7 +240,6 @@ static void create_unix_socket(const char *socket_dir, int listen_port)
 
 	/* fill sockaddr struct */
 	memset(&un, 0, sizeof(un));
-
 	un.sun_family = AF_UNIX;
 	snprintf(un.sun_path, sizeof(un.sun_path),
 		 "%s/.s.PGSQL.%d", socket_dir, listen_port);
@@ -406,6 +403,7 @@ loop:
 		suspend_pooler();
 		return;
 	}
+
 	log_noise("new fd from accept=%d", fd);
 	client_request.fd = fd;
 	client_request.is_unix = is_unix;
@@ -417,14 +415,14 @@ loop:
 		 * The main thread writes connection details to a pipe, and the target worker
 		 * thread reads from the pipe to handle the connection.
 		 */
-		int n = pipe_write(threads[next_thread].pipefd[1], &client_request, sizeof(client_request));
+		int n = pipe_write(workers[next_worker_thread_idx].pipefd[1], &client_request, sizeof(client_request));
 		if (n <= 0) {
 			log_error("failed to write to pipe");
 			close(fd);
 		}
 
-		next_thread++;
-		next_thread %= arg_thread_number;
+		next_worker_thread_idx++;
+		next_worker_thread_idx %= num_threads;
 	} else {
 		/* Single-threaded mode: handle connection directly */
 		accept_client_handler(is_unix, fd);
@@ -570,23 +568,24 @@ static bool parse_addr(void *arg, const char *addr)
 
 void thread_pooler_setup(void)
 {
-	int thread_id = get_current_thread_id();
-	struct event_base *base = threads[thread_id].base;
-	setup_multithread_event_args(&threads[thread_id].handle_request_event_args, NULL, handle_request, true, &threads[thread_id].thread_lock);
-	event_assign(&(threads[thread_id].ev_handle_request),
+	int thread_id = get_current_worker_thread_id();
+	struct event_base *base = workers[thread_id].base;
+	init_worker_event_args(&workers[thread_id].handle_request_event_args, NULL, handle_request, true, &workers[thread_id].thread_lock);
+	event_assign(&(workers[thread_id].ev_handle_request),
 		     base,
-		     threads[thread_id].pipefd[0],
+		     workers[thread_id].pipefd[0],
 		     EV_READ | EV_PERSIST,
-		     multithread_event_wrapper,
-		     &threads[thread_id].handle_request_event_args);
+		     worker_thread_event_wrapper,
+		     &workers[thread_id].handle_request_event_args);
 
-	event_add(&(threads[thread_id].ev_handle_request), NULL);
+	event_add(&(workers[thread_id].ev_handle_request), NULL);
 }
 
 /* listen on socket - should happen after all other initializations */
 void pooler_setup(void)
 {
 	int n;
+
 	n = sd_listen_fds(0);
 	if (n > 0) {
 		if (cf_listen_addr && *cf_listen_addr)

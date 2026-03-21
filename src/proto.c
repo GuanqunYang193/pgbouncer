@@ -21,7 +21,6 @@
  */
 
 #include "bouncer.h"
-#include "multithread.h"
 #include "scram.h"
 #include "common/sha2.h"
 
